@@ -8,10 +8,16 @@ from tqdm import tqdm
 
 from dhm.corrfunc.bins import partition_box
 
-filterwarnings('ignore')
+filterwarnings("ignore")
 
-__all__ = ["process_DD_pairs", "tpcf_jk", "cross_tpcf_jk", 
-           "density", "density_jk", "cross_tpcf_jk_radial"]
+__all__ = [
+    "process_DD_pairs",
+    "tpcf_jk",
+    "cross_tpcf_jk",
+    "density",
+    "density_jk",
+    "cross_tpcf_jk_radial",
+]
 
 
 def process_DD_pairs(
@@ -25,16 +31,16 @@ def process_DD_pairs(
     weights_2=None,
     nthreads: int = 4,
 ) -> np.ndarray:
-    """Counts data-data pais by using pre-partitiones box into a 3D grid. 
+    """Counts data-data pais by using pre-partitiones box into a 3D grid.
     Corrfunc does the heavy lifting. Doc is taken from Corrfunc.theory.DD
 
     Parameters
     ----------
     data_1 : np.ndarray
-        The array of X/Y/Z positions for the first set of points. Calculations 
+        The array of X/Y/Z positions for the first set of points. Calculations
         are done in the precision of the supplied arrays.
     data_2 : np.ndarray
-        The array of X/Y/Z positions for the second set of points. Calculations 
+        The array of X/Y/Z positions for the second set of points. Calculations
         are done in the precision of the supplied arrays.
     data_1_id : list
         Box partitioning 3D grid.
@@ -46,13 +52,13 @@ def process_DD_pairs(
     gridsize : float
         Size of sub-volume or cell of the box
     weights_1 : array_like, real (float/double), optional
-        A scalar, or an array of weights of shape `(n_weights, n_positions)` or 
-        `(n_positions,)`. If `None` will be set to uniform weights. 
+        A scalar, or an array of weights of shape `(n_weights, n_positions)` or
+        `(n_positions,)`. If `None` will be set to uniform weights.
         By default `None`
     weights_2 : array_like, real (float/double), optional
         Same as `weights_1` but for `data_2`, by default None
     nthreads : int, optional
-        The number of OpenMP threads to use. Has no effect if OpenMP was not 
+        The number of OpenMP threads to use. Has no effect if OpenMP was not
         enabled during library compilation, by default 4
 
     Returns
@@ -69,8 +75,7 @@ def process_DD_pairs(
     zeros = np.zeros(radial_edges.size - 1)
 
     # Pair counting for all elements in each cell
-    for cell in tqdm(range(n_cells), desc="Pair counting", ncols=100,
-                     colour='green'):
+    for cell in tqdm(range(n_cells), desc="Pair counting", ncols=100, colour="green"):
         # Get data 1 in cell
         xd1 = data_1[data_1_id[cell], 0]
         yd1 = data_1[data_1_id[cell], 1]
@@ -111,7 +116,7 @@ def process_DD_pairs(
                 Z2=zd2,
                 weights1=wd1,
                 weights2=wd2,
-                weight_type='pair_product',
+                weight_type="pair_product",
                 periodic=True,
                 boxsize=boxsize,
                 verbose=False,
@@ -155,10 +160,10 @@ def tpcf_jk(
     Returns
     -------
     Tuple[np.ndarray]
-        Returns a tuple with `(xi, xi_samples, xi_mean, cov)`, where `xi` is the 
+        Returns a tuple with `(xi, xi_samples, xi_mean, cov)`, where `xi` is the
         total correlation function measured directly on the full simulation box.
-        `xi_samples` is an array of shape `(Njk, Nbins)` with the Njk samples of 
-        the correlation function. `xi_mean` and `xi_cov` are the mean and 
+        `xi_samples` is an array of shape `(Njk, Nbins)` with the Njk samples of
+        the correlation function. `xi_mean` and `xi_cov` are the mean and
         covariance of `xi_samples`.
     """
     # Number of radial bins
@@ -177,7 +182,7 @@ def tpcf_jk(
     data_1_xx = np.arange(n_obj_d1)
 
     # Volume of the box and spherical shells.
-    volume_box = boxsize ** 3
+    volume_box = boxsize**3
     volume_shell = 4.0 / 3.0 * np.pi * np.diff(np.power(radial_edges, 3))
 
     # Number densities
@@ -196,20 +201,22 @@ def tpcf_jk(
         d1_total_sample = n_obj_d1 - np.size(data_1_xx[data_1_id[sample]], 0)
 
         # xi_i[cell] = dd_pairs_i[cell] / (n1 * n2 * Vjk * Vshell) - 1
-        xi_samples[sample] = dd_pairs_removed_samples[sample] / \
-            (d1_total_sample * num_dens_d2 * volume_shell) - 1
+        xi_samples[sample] = (
+            dd_pairs_removed_samples[sample]
+            / (d1_total_sample * num_dens_d2 * volume_shell)
+            - 1
+        )
 
     # Compute mean correlation function from all jk samples
     # for i in range(n_bins):
-        # xi_mean[i] = np.mean(xi_samples[:, i])
+    # xi_mean[i] = np.mean(xi_samples[:, i])
     xi_mean = np.mean(xi_samples, axis=0)
 
     # Compute covariance matrix of the radial bins using all jk samples
     xi_cov = (float(n_jk_samples) - 1.0) * np.cov(xi_samples.T, bias=True)
 
     # Compute the total correlation function from all pairs
-    xi = dd_pairs_total / \
-        (num_dens_d1 * num_dens_d2 * volume_box * volume_shell) - 1
+    xi = dd_pairs_total / (num_dens_d1 * num_dens_d2 * volume_box * volume_shell) - 1
 
     return xi, xi_samples, xi_mean, xi_cov
 
@@ -225,16 +232,16 @@ def cross_tpcf_jk(
     nthreads: int = 4,
     jk_estimates: bool = True,
 ) -> Tuple[np.ndarray]:
-    """Compute the cross-correlation function between data 1 and data 2. It is 
-    assumed that data 1 
+    """Compute the cross-correlation function between data 1 and data 2. It is
+    assumed that data 1
 
     Parameters
     ----------
     data_1 : np.ndarray
-        The array of X/Y/Z positions for the first set of points. Calculations 
+        The array of X/Y/Z positions for the first set of points. Calculations
         are done in the precision of the supplied arrays.
     data_2 : np.ndarray
-        The array of X/Y/Z positions for the second set of points. Calculations 
+        The array of X/Y/Z positions for the second set of points. Calculations
         are done in the precision of the supplied arrays.
     radial_edges : np.ndarray
         The bins need to be contiguous and sorted in increasing order (smallest
@@ -244,13 +251,13 @@ def cross_tpcf_jk(
     gridsize : float
         Size of sub-volume or cell of the box
     weights_1 : array_like, real (float/double), optional
-        A scalar, or an array of weights of shape `(n_weights, n_positions)` or 
-        `(n_positions,)`. If `None` will be set to uniform weights. 
+        A scalar, or an array of weights of shape `(n_weights, n_positions)` or
+        `(n_positions,)`. If `None` will be set to uniform weights.
         By default `None`
     weights_2 : array_like, real (float/double), optional
         Same as `weights_1` but for `data_2`, by default None
     nthreads : int, optional
-        The number of OpenMP threads to use. Has no effect if OpenMP was not 
+        The number of OpenMP threads to use. Has no effect if OpenMP was not
         enabled during library compilation, by default 4
     jk_estimates : bool, optional
         If True returns all the jackknife samples and their mean, by default True
@@ -380,9 +387,9 @@ def density_jk(
     -------
     Tuple[np.ndarray]
         Returns a tuple with `(rho, rho_samples, rho_mean, cov)`, where `rho` is
-        the total correlation function measured directly on the full simulation 
-        box. `rho_samples` is an array of shape `(Njk, Nbins)` with the Njk 
-        samples of the density profile. `rho_mean` and `rho_cov` are the mean 
+        the total correlation function measured directly on the full simulation
+        box. `rho_samples` is an array of shape `(Njk, Nbins)` with the Njk
+        samples of the density profile. `rho_mean` and `rho_cov` are the mean
         and covariance of `rho_samples`.
     """
     n_bins = radial_edges.shape[0] - 1
@@ -397,8 +404,9 @@ def density_jk(
     data_1_xx = np.arange(n_obj_d1)
 
     rho_samples = np.zeros((n_jk_samples, n_bins))
-    for sample in tqdm(range(n_jk_samples), desc="Pair counting", ncols=100,
-                       colour='green'):
+    for sample in tqdm(
+        range(n_jk_samples), desc="Pair counting", ncols=100, colour="green"
+    ):
         d1_total_sample = np.size(data_1_xx[data_1_id[sample]], 0)
         mask = np.isin(radial_data_1_id, data_1_hid[data_1_id[sample]])
 
@@ -406,18 +414,22 @@ def density_jk(
             n_obj=d1_total_sample,
             radii=radial_data[mask],
             radial_edges=radial_edges,
-            mass=mass
+            mass=mass,
         )
 
     # Compute mean correlation function from all jk samples
     rho_mean = np.mean(rho_samples, axis=0)
 
     # Compute covariance matrix of the radial bins using all jk samples
-    rho_cov = (float(n_jk_samples) - 1.0) * \
-        np.cov(rho_samples.T, bias=True) / np.sqrt(n_obj_d1)
+    rho_cov = (
+        (float(n_jk_samples) - 1.0)
+        * np.cov(rho_samples.T, bias=True)
+        / np.sqrt(n_obj_d1)
+    )
 
-    rho = density(n_obj=n_obj_d1, radii=radial_data,
-                  radial_edges=radial_edges, mass=mass)
+    rho = density(
+        n_obj=n_obj_d1, radii=radial_data, radial_edges=radial_edges, mass=mass
+    )
 
     return rho, rho_samples, rho_mean, rho_cov
 
@@ -438,7 +450,7 @@ def cross_tpcf_jk_radial(
     Parameters
     ----------
     data_1 : np.ndarray
-        The array of X/Y/Z positions for the first set of points. Calculations 
+        The array of X/Y/Z positions for the first set of points. Calculations
         are done in the precision of the supplied arrays.
     data_1_hid : np.ndarray
         Halo ID.
