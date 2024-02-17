@@ -5,7 +5,10 @@ from warnings import filterwarnings
 import numpy as np
 from tqdm import tqdm
 
-filterwarnings('ignore')
+filterwarnings("ignore")
+
+__all__ = ["generate_bins", "generate_bin_str", "partition_box"]
+
 
 def generate_bins(
     bmin: float,
@@ -59,7 +62,7 @@ def generate_bins(
 
 
 def generate_bin_str(bin_edges: Union[List[float], Tuple[float]]) -> str:
-    """Generates a formatted string 'min-max' from bin edges. Intended to be 
+    """Generates a formatted string 'min-max' from bin edges. Intended to be
     compatible with HDF dataset naming and LaTeX format.
 
     Parameters
@@ -79,10 +82,9 @@ def generate_bin_str(bin_edges: Union[List[float], Tuple[float]]) -> str:
         If bin_edges is not a list or tuple of length 2.
     """
     if type(bin_edges) in [list, tuple] and len(bin_edges) == 2:
-        return f'{bin_edges[0]:.2f}-{bin_edges[-1]:.2f}'
+        return f"{bin_edges[0]:.2f}-{bin_edges[-1]:.2f}"
     else:
-        raise ValueError(
-            "bin_edges must be a list of floats and len=2: [min, max]")
+        raise ValueError("bin_edges must be a list of floats and len=2: [min, max]")
 
 
 def partition_box(data: np.ndarray, boxsize: float, gridsize: float) -> List[float]:
@@ -91,7 +93,7 @@ def partition_box(data: np.ndarray, boxsize: float, gridsize: float) -> List[flo
     Parameters
     ----------
     data : np.ndarray
-        `(N, d)` array with all data points' coordinates, where `N` is the 
+        `(N, d)` array with all data points' coordinates, where `N` is the
         number of data points and `d` the dimensions
     boxsize : float
         Simulation box size (per side)
@@ -113,10 +115,14 @@ def partition_box(data: np.ndarray, boxsize: float, gridsize: float) -> List[flo
     # This list stores all of the particles original IDs in a convenient 3D
     # list. It is kind of a pointer of size n_cpd**3
     data_cell_id = [[] for _ in range(cells_per_side**3)]
-    cells = cells_per_side**2 * grid_id[:, 0] + \
-        cells_per_side * grid_id[:, 1] + grid_id[:, 2]
-    for cell in tqdm(range(np.size(data, 0)), desc="Partitioning box", ncols=100, colour='blue'):
+    cells = (
+        cells_per_side**2 * grid_id[:, 0]
+        + cells_per_side * grid_id[:, 1]
+        + grid_id[:, 2]
+    )
+    for cell in tqdm(
+        range(np.size(data, 0)), desc="Partitioning box", ncols=100, colour="blue"
+    ):
         data_cell_id[cells[cell]].append(cell)
 
     return data_cell_id
-
