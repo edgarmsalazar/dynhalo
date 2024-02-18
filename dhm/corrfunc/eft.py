@@ -5,11 +5,6 @@ from velocileptors.LPT.cleft_fftw import CLEFT
 from velocileptors.Utils.qfuncfft import loginterp
 from ZeNBu.zenbu import SphericalBesselTransform
 
-__all__ = [
-    "zeldovich_approx_corr_func_prediction",
-    "eft_counter_term_corr_func_prediction",
-]
-
 
 def zeldovich_approx_corr_func_prediction(
     h: float, Om: float, Omb: float, ns: float, sigma8: float, z: float = 0, **kwargs
@@ -70,6 +65,10 @@ def eft_counter_term_corr_func_prediction(klin, plin, cs=4.5) -> Tuple[np.ndarra
     kcleft = cleft.pktable[:, 0]
     # Hankel transform object
     sph = SphericalBesselTransform(klin, L=5, low_ring=True, fourier=True)
+    
+    # No counter term
+    # eftpred_cs0 = loginterp(kcleft, lptpk)(klin)
+    # r_eft, xi_eft_cs0 = sph.sph(0, eftpred_cs0)
     
     # With counter term
     k_factor =  kcleft**2 / (1 + kcleft ** 2)
