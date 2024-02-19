@@ -224,7 +224,8 @@ def xi_large_estimation(
         return r_eft, xi_large
     else:
         if power_spectra and linear:
-            return (k_lin, p_lin, p_zel), (r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max)
+            return (k_lin, p_lin, p_zel), \
+                (r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max)
         if power_spectra and not linear:
             return (k_lin, p_zel), (r_eft, xi_eft, xi_zel, xi_large, B_max, cs_max)
         elif not power_spectra and linear:
