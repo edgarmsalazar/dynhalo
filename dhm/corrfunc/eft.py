@@ -34,7 +34,7 @@ def zeldovich_approx_corr_func_prediction(
     sigma8 : float
         _description_
     z : float, optional
-        rCosmological Redshift, by default 0
+        Cosmological Redshift, by default 0
 
     Returns
     -------
@@ -61,11 +61,45 @@ def zeldovich_approx_corr_func_prediction(
     return pk_lin, pk_zel, cf_lin, cf_zel
 
 
-def eft_tranform(k) -> SphericalBesselTransform:
+def eft_tranform(k: np.ndarray) -> SphericalBesselTransform:
+    """Creates a spherical Bessel transform object to compute fast Fourier 
+    transformations.
+
+    Parameters
+    ----------
+    k : np.ndarray
+        Fourier modes.
+
+    Returns
+    -------
+    SphericalBesselTransform
+
+    """
     return SphericalBesselTransform(k, L=5, low_ring=True, fourier=True)
 
 
-def eft_counter_term_corr_func_prediction(klin, plin, cs=0) -> Tuple[np.ndarray]:
+def eft_counter_term_corr_func_prediction(
+    klin: np.ndarray,
+    plin: np.ndarray,
+    cs: float = 0
+) -> Tuple[np.ndarray]:
+    """Computes the 1-Loop LPT prediction from linear power spectrum up to the 
+    counter term.
+
+    Parameters
+    ----------
+    klin : _type_
+        Fourier modes.
+    plin : _type_
+        Linear power spectrum evaluated at each k
+    cs : int, optional
+        Speed sound for the counter term, by default 0
+
+    Returns
+    -------
+    Tuple[np.ndarray]
+        Correlation function prediction and r
+    """
     cleft = CLEFT(klin, plin)
     cleft.make_ptable(nk=400)
 
@@ -89,13 +123,51 @@ def eft_counter_term_corr_func_prediction(klin, plin, cs=0) -> Tuple[np.ndarray]
     return r_eft, xi_eft[0]
 
 
-def power_spec_box_effect(k, pk, boxsize, lamb):
+def power_spec_box_effect(
+    k: np.ndarray,
+    pk: np.ndarray,
+    boxsize: float,
+    lamb: float
+) -> np.ndarray:
+    """Truncates the power spectrum at small k accounting for the effects of a 
+    finite simulation box.
+
+    Parameters
+    ----------
+    k : np.ndarray
+        Fourier modes
+    pk : np.ndarray
+        Power spectrum evaluated at each k
+    boxsize : float
+        Simulation box size.
+    lamb : float
+        Attenuation factor at small k
+
+    Returns
+    -------
+    np.ndarray
+        Attenuated power spectrum such that $P(k \rightarrow 0) = 0$
+    """
     rbox = boxsize * np.cbrt(3. / 4. / np.pi)
     phat = (1 - np.exp(-lamb * (rbox * k) ** 2)) * pk
     return phat
 
 
-def loglike_cs(cs, data) -> float:
+def loglike_cs(cs: float, data: Tuple[float]) -> float:
+    """Log-likelihood for the sound speed parameter of the counter term.
+
+    Parameters
+    ----------
+    cs : float
+        Sound speed
+    data : Tuple[float]
+        (k, pk, r, xi, cov)
+
+    Returns
+    -------
+    float
+        
+    """
     # Check prior
     if cs < 0:
         return -np.inf
@@ -108,7 +180,22 @@ def loglike_cs(cs, data) -> float:
     return -np.dot(d, np.linalg.solve(cov, d))
 
 
-def loglike_lamb(lamb, data) -> float:
+def loglike_lamb(lamb: float, data: Tuple[float]) -> float:
+    """Log-likelihood for the attenuation parameter in the power spectrum low k 
+    limit
+
+    Parameters
+    ----------
+    lamb : float
+        Attenuation factor
+    data : Tuple[float]
+        (k, pk, r, xi, cov, cs, boxsize)
+
+    Returns
+    -------
+    float
+        
+    """
     # Check priors
     if lamb < 0:
         return -np.inf
@@ -123,7 +210,21 @@ def loglike_lamb(lamb, data) -> float:
     return -np.dot(d, np.linalg.solve(cov, d))
 
 
-def loglike_B(B, data) -> float:
+def loglike_B(B: float, data: Tuple[float]) -> float:
+    """Log-likelihood for the ratio parameter between ZA and data.
+
+    Parameters
+    ----------
+    B : float
+        Ratio parameter
+    data : Tuple[float]
+        (xi, xi_pred)
+
+    Returns
+    -------
+    float
+        
+    """
     if not B > 0:
         return -np.inf
 
@@ -146,7 +247,43 @@ def xi_large_estimation(
     large_only: bool = True,
     power_spectra: bool = False,
     linear: bool = False,
-):
+) -> Tuple[np.ndarray]:
+    """Computes the large scale limit correlation function using 1-Loop LPT.
+
+    Parameters
+    ----------
+    r : np.ndarray
+        Radial points of the measured correlation function
+    xi : np.ndarray
+        Measured correlation function from a simulation box
+    xi_cov : np.ndarray
+        Covariance matrix of the measured correlation function
+    h : float
+        H0 / 100, where H0 is the Hubble parameter.
+    Om : float
+        Matter density
+    Omb : float
+        Baryonic matter density
+    ns : float
+        Spectral index
+    sigma8 : float
+        _description_
+    boxsize : float
+        Length of one side of the simulation box.
+    z : float, optional
+        Cosmological Redshift, by default 0
+    large_only : bool, optional
+        if True returns all EFT correlations and parameters (cs, lambda), by default True
+    power_spectra : bool, optional
+        If True, also returns the power spectra, by default False
+    linear : bool, optional
+        If True, also returns the linear theory predictions, by default False
+
+    Returns
+    -------
+    Tuple[np.ndarray]
+        
+    """
     # Compute ZA
     pk_lin_call, xi_lin_call, pk_zel_call, xi_zel_call = (
         zeldovich_approx_corr_func_prediction(
@@ -224,14 +361,14 @@ def xi_large_estimation(
         return r_eft, xi_large
     else:
         if power_spectra and linear:
-            return (k_lin, p_lin, p_zel), \
-                (r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max)
+            return k_lin, p_lin, p_zel, \
+                r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max
         if power_spectra and not linear:
-            return (k_lin, p_zel), (r_eft, xi_eft, xi_zel, xi_large, B_max, cs_max)
+            return k_lin, p_zel, r_eft, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max
         elif not power_spectra and linear:
-            return r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max
+            return r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max
         else:
-            return r_eft, xi_eft, xi_zel, xi_large, B_max, cs_max
+            return r_eft, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max
 
 
 if __name__ == "__main__":
