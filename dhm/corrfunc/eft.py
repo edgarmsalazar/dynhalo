@@ -78,13 +78,13 @@ def eft_tranform(k: np.ndarray) -> SphericalBesselTransform:
     return SphericalBesselTransform(k, L=5, low_ring=True, fourier=True)
 
 
-def eft_counter_term_corr_func_prediction(
+def eft_counter_term_power_spec_prediction(
     klin: np.ndarray,
     plin: np.ndarray,
     cs: float = 0
 ) -> Tuple[np.ndarray]:
-    """Computes the 1-Loop LPT prediction from linear power spectrum up to the 
-    counter term.
+    """Computes the 1-Loop LPT power spectrum prediction from linear power
+      spectrum up to the counter term.
 
     Parameters
     ----------
@@ -109,15 +109,42 @@ def eft_counter_term_corr_func_prediction(
     cterm = cleft.pktable[:, -1]
     # Model evaluation k modes
     kcleft = cleft.pktable[:, 0]
-    # Hankel transform object
-    sph = eft_tranform(klin)
 
     # Add counter term
     if cs != 0:
         k_factor = kcleft**2 / (1 + kcleft**2)
         lptpk += cs * k_factor * cterm
 
-    eftpred = loginterp(kcleft, lptpk)(klin)
+    eft_pred = loginterp(kcleft, lptpk)(klin)
+    return klin, eft_pred
+
+
+def eft_counter_term_corr_func_prediction(
+    klin: np.ndarray,
+    plin: np.ndarray,
+    cs: float = 0
+) -> Tuple[np.ndarray]:
+    """Computes the 1-Loop LPT correlation function prediction from linear power
+      spectrum up to the counter term.
+
+    Parameters
+    ----------
+    klin : _type_
+        Fourier modes.
+    plin : _type_
+        Linear power spectrum evaluated at each k
+    cs : int, optional
+        Speed sound for the counter term, by default 0
+
+    Returns
+    -------
+    Tuple[np.ndarray]
+        Correlation function prediction and r
+    """
+    # Get power spectrum
+    eftpred = eft_counter_term_power_spec_prediction(klin, plin, cs=cs)
+    # Hankel transform object
+    sph = eft_tranform(klin)
     r_eft, xi_eft = sph.sph(0, eftpred)
 
     return r_eft, xi_eft[0]
@@ -245,7 +272,6 @@ def xi_large_estimation(
     boxsize: float,
     z: float = 0,
     large_only: bool = True,
-    power_spectra: bool = False,
     linear: bool = False,
 ) -> Tuple[np.ndarray]:
     """Computes the large scale limit correlation function using 1-Loop LPT.
@@ -273,11 +299,9 @@ def xi_large_estimation(
     z : float, optional
         Cosmological Redshift, by default 0
     large_only : bool, optional
-        if True returns all EFT correlations and parameters (cs, lambda), by default True
+        if True, only returns `xi_large`, by default True
     power_spectra : bool, optional
         If True, also returns the power spectra, by default False
-    linear : bool, optional
-        If True, also returns the linear theory predictions, by default False
 
     Returns
     -------
@@ -332,9 +356,10 @@ def xi_large_estimation(
     # ==========================================================================
 
     # Compute the 1-loop EFT approx.
-    phat = power_spec_box_effect(k_lin, p_lin, boxsize, lamb_max)
+    p_hat = power_spec_box_effect(k_lin, p_lin, boxsize, lamb_max)
+    p_eft = eft_counter_term_power_spec_prediction(k_lin, p_hat, cs=cs_max)
     r_eft, xi_eft = eft_counter_term_corr_func_prediction(
-        k_lin, phat, cs=cs_max)
+        k_lin, p_hat, cs=cs_max)
 
     # Evaluate ZA in the same grid as EFT
     p_zel = pk_zel_call(k_lin)
@@ -356,19 +381,16 @@ def xi_large_estimation(
     xi_large = (1.0 - erf_transition) * B_max * xi_zel + \
         erf_transition * xi_eft
 
+    power_spectra = (k_lin, p_lin, p_hat, p_eft, p_zel)
+    corr_func = (r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max)
     # Return all quantities
     if large_only:
         return r_eft, xi_large
     else:
-        if power_spectra and linear:
-            return k_lin, p_lin, p_zel, \
-                r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max
-        if power_spectra and not linear:
-            return k_lin, p_zel, r_eft, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max
-        elif not power_spectra and linear:
-            return r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max
+        if power_spectra:
+            return power_spectra, corr_func
         else:
-            return r_eft, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max
+            return corr_func
 
 
 if __name__ == "__main__":
