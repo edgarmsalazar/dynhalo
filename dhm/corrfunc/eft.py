@@ -65,7 +65,7 @@ def eft_tranform(k) -> SphericalBesselTransform:
     return SphericalBesselTransform(k, L=5, low_ring=True, fourier=True)
 
 
-def eft_counter_term_corr_func_prediction(klin, plin, cs=4.5) -> Tuple[np.ndarray]:
+def eft_counter_term_corr_func_prediction(klin, plin, cs=0) -> Tuple[np.ndarray]:
     cleft = CLEFT(klin, plin)
     cleft.make_ptable(nk=400)
 
@@ -78,13 +78,12 @@ def eft_counter_term_corr_func_prediction(klin, plin, cs=4.5) -> Tuple[np.ndarra
     # Hankel transform object
     sph = eft_tranform(klin)
 
-    # No counter term
-    # eftpred_cs0 = loginterp(kcleft, lptpk)(klin)
-    # r_eft, xi_eft_cs0 = sph.sph(0, eftpred_cs0)
-
-    # With counter term
-    k_factor = kcleft**2 / (1 + kcleft**2)
-    eftpred = loginterp(kcleft, lptpk + cs * k_factor * cterm)(klin)
+    # Add counter term
+    if cs != 0:
+        k_factor = kcleft**2 / (1 + kcleft**2)
+        lptpk += cs * k_factor * cterm
+        
+    eftpred = loginterp(kcleft, lptpk)(klin)
     r_eft, xi_eft = sph.sph(0, eftpred)
 
     return r_eft, xi_eft[0]
