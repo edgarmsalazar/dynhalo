@@ -7,3 +7,5 @@
 temp/
 test/img/
 test/data/
+scripts/data/
+scripts/*.ipynb
