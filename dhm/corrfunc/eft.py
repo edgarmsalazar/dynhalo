@@ -116,7 +116,7 @@ def eft_counter_term_power_spec_prediction(
         lptpk += cs * k_factor * cterm
 
     eft_pred = loginterp(kcleft, lptpk)(klin)
-    return klin, eft_pred
+    return eft_pred
 
 
 def eft_counter_term_corr_func_prediction(
@@ -193,7 +193,7 @@ def loglike_cs(cs: float, data: Tuple[float]) -> float:
     Returns
     -------
     float
-        
+
     """
     # Check prior
     if cs < 0:
@@ -221,7 +221,7 @@ def loglike_lamb(lamb: float, data: Tuple[float]) -> float:
     Returns
     -------
     float
-        
+
     """
     # Check priors
     if lamb < 0:
@@ -250,7 +250,7 @@ def loglike_B(B: float, data: Tuple[float]) -> float:
     Returns
     -------
     float
-        
+
     """
     if not B > 0:
         return -np.inf
@@ -306,7 +306,7 @@ def xi_large_estimation(
     Returns
     -------
     Tuple[np.ndarray]
-        
+
     """
     # Compute ZA
     pk_lin_call, xi_lin_call, pk_zel_call, xi_zel_call = (
@@ -382,7 +382,8 @@ def xi_large_estimation(
         erf_transition * xi_eft
 
     power_spectra = (k_lin, p_lin, p_hat, p_eft, p_zel)
-    corr_func = (r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max)
+    corr_func = (r_eft, xi_lin, xi_eft, xi_zel,
+                 xi_large, B_max, cs_max, lamb_max)
     # Return all quantities
     if large_only:
         return r_eft, xi_large
