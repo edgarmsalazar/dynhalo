@@ -1,6 +1,7 @@
 from itertools import repeat
 from multiprocessing.pool import Pool
 from typing import Callable, Tuple
+from warnings import filterwarnings
 
 import numpy as np
 from nbodykit.lab import cosmology
@@ -10,6 +11,8 @@ from velocileptors.Utils.qfuncfft import loginterp
 from ZeNBu.zenbu import SphericalBesselTransform
 
 from dhm.corrfunc.model import error_func_pos_incr
+
+filterwarnings("ignore")
 
 
 def zeldovich_approx_corr_func_prediction(
@@ -84,10 +87,10 @@ def eft_counter_term_corr_func_prediction(klin, plin, cs=4.5) -> Tuple[np.ndarra
     eftpred = loginterp(kcleft, lptpk + cs * k_factor * cterm)(klin)
     r_eft, xi_eft = sph.sph(0, eftpred)
 
-    return r_eft, xi_eft
+    return r_eft, xi_eft[0]
 
 
-def loglike_cs(cs, *data) -> float:
+def loglike_cs(cs, data) -> float:
     # Check prior
     if not cs > 0:
         return -np.inf
@@ -98,7 +101,7 @@ def loglike_cs(cs, *data) -> float:
     return -np.dot(d, np.linalg.solve(cov, d))
 
 
-def loglike_B(B, *data) -> float:
+def loglike_B(B, data) -> float:
     if not B > 0:
         return -np.inf
 
@@ -137,6 +140,7 @@ def xi_large_estimation(
     # Define grids to estimate cs
     ngrid = 20
     grid = np.linspace(0.5 * 4.5, 5 * 4.5, ngrid)
+    # cost_ = loglike_cs(4.5, args)
     with Pool(16) as p:
         loglike_grid = p.starmap(loglike_cs, zip(grid, repeat(args, ngrid)))
     cs_max = grid[np.argmax(loglike_grid)]
@@ -150,12 +154,14 @@ def xi_large_estimation(
     r_eft, xi_eft = eft_counter_term_corr_func_prediction(k_lin, p_lin, cs=cs_max)
 
     # Evaluate ZA in the same grid as EFT
-    pzel = pk_zel_call(k_lin)
+    p_zel = pk_zel_call(k_lin)
     xi_lin = xi_lin_call(r_eft)
     xi_zel = xi_zel_call(r_eft)
 
+    # Find the ratio between
+    r_mask = (30 < r_eft) & (r_eft < 50)
     B_grid = np.linspace(0.8, 1.2, 100)
-    loglike_grid = [loglike_B(b) for b in B_grid]
+    loglike_grid = [loglike_B(b, (xi_eft[r_mask], xi_zel[r_mask])) for b in B_grid]
     B_max = B_grid[np.argmax(loglike_grid)]
 
     erf_transition = error_func_pos_incr(r_eft, 1.0, 40.0, 3.0)
@@ -167,13 +173,13 @@ def xi_large_estimation(
         return r_eft, xi_large
     else:
         if power_spectra and linear:
-            return (k_lin, p_lin, pzel), (r, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max)
+            return (k_lin, p_lin, p_zel), (r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max)
         if power_spectra and not linear:
-            return (k_lin, pzel), (r, xi_eft, xi_zel, xi_large, B_max, cs_max)
+            return (k_lin, p_zel), (r_eft, xi_eft, xi_zel, xi_large, B_max, cs_max)
         elif not power_spectra and linear:
-            return r, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max
+            return r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max
         else:
-            return r, xi_eft, xi_zel, xi_large, B_max, cs_max
+            return r_eft, xi_eft, xi_zel, xi_large, B_max, cs_max
 
 
 if __name__ == "__main__":
