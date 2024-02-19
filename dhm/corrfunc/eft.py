@@ -272,7 +272,7 @@ def xi_large_estimation(
     boxsize: float,
     z: float = 0,
     large_only: bool = True,
-    linear: bool = False,
+    power_spectra: bool = False,
 ) -> Tuple[np.ndarray]:
     """Computes the large scale limit correlation function using 1-Loop LPT.
 
