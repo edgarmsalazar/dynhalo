@@ -311,6 +311,20 @@ def find_B(r_eft, xi_eft, xi_zel) -> float:
     return B_max
 
 
+def xi_large_construct(
+    r: np.ndarray,
+    xi_zel: np.ndarray,
+    xi_eft: np.ndarray,
+    b: float,
+    fmu: float = 40.,
+    fsig: float = 3.,
+) -> np.ndarray:
+    erf_transition = error_func_pos_incr(r, 1.0, fmu, fsig)
+    xi_large = (1.0 - erf_transition) * b * xi_zel + \
+        erf_transition * xi_eft
+    return xi_large
+
+
 def xi_large_estimation_from_data(
     r: np.ndarray,
     xi: np.ndarray,
