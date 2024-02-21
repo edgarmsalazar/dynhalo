@@ -16,7 +16,8 @@ filterwarnings("ignore")
 
 
 def zeldovich_approx_corr_func_prediction(
-    h: float, Om: float, Omb: float, ns: float, sigma8: float, z: float = 0
+    h: float, Om: float, Omb: float, ns: float, sigma8: float, z: float = 0,
+    power_spectra: bool = True
 ) -> Tuple[Callable]:
     """Returns the linear and Zel'dovich approximation power spectra and
     correlation functions.
@@ -35,6 +36,8 @@ def zeldovich_approx_corr_func_prediction(
         _description_
     z : float, optional
         Cosmological Redshift, by default 0
+    power_spectra : bool
+        If True, returns the linear and ZA power spectra
 
     Returns
     -------
@@ -58,8 +61,10 @@ def zeldovich_approx_corr_func_prediction(
     cf_lin = cosmology.CorrelationFunction(pk_lin)
     cf_zel = cosmology.CorrelationFunction(pk_zel)
 
-    return pk_lin, pk_zel, cf_lin, cf_zel
-
+    if power_spectra:
+        return cf_lin, cf_zel, pk_lin, pk_zel
+    else:
+        return cf_lin, cf_zel
 
 def eft_tranform(k: np.ndarray) -> SphericalBesselTransform:
     """Creates a spherical Bessel transform object to compute fast Fourier 
@@ -237,7 +242,7 @@ def loglike_lamb(lamb: float, data: Tuple[float]) -> float:
     return -np.dot(d, np.linalg.solve(cov, d))
 
 
-def loglike_B(B: float, data: Tuple[float]) -> float:
+def loglike_B(B: float, data: Tuple[np.ndarray]) -> float:
     """Log-likelihood for the ratio parameter between ZA and data.
 
     Parameters
@@ -252,7 +257,7 @@ def loglike_B(B: float, data: Tuple[float]) -> float:
     float
 
     """
-    if not B > 0:
+    if B < 0:
         return -np.inf
 
     xi, xi_pred = data
@@ -260,7 +265,53 @@ def loglike_B(B: float, data: Tuple[float]) -> float:
     return -np.dot(d, d)
 
 
-def xi_large_estimation(
+def find_cs(k_lin, p_lin, r, xi, xi_cov) -> float:
+    r_mask = (40 < r) & (r < 80)
+    args = (k_lin, p_lin, r[r_mask], xi[r_mask], xi_cov[r_mask, :][:, r_mask])
+    # Define grids to estimate cs
+    ngrid = 16
+    grid = np.logspace(0, 1.2, ngrid)
+    with Pool(16) as p:
+        loglike_grid = p.starmap(loglike_cs, zip(grid, repeat(args, ngrid)))
+    cs_max = grid[np.argmax(loglike_grid)]
+    # Refine grid around cs_max with 10% deviation
+    ngrid = 80
+    grid = np.linspace(0.9*cs_max, 1.1*cs_max, ngrid)
+    with Pool(16) as p:
+        loglike_grid = p.starmap(loglike_cs, zip(grid, repeat(args, ngrid)))
+    cs_max = grid[np.argmax(loglike_grid)]
+    return cs_max
+
+
+def find_lamb(k_lin, p_lin, r, xi, xi_cov, cs_max, boxsize) -> float:
+    r_mask = (40 < r) & (r < 150)
+    args = (k_lin, p_lin, r[r_mask], xi[r_mask], xi_cov[r_mask, :][:, r_mask],
+            cs_max, boxsize)
+    # Define grids to estimate cs
+    ngrid = 16
+    grid = np.logspace(-1.5, 0, ngrid)
+    with Pool(16) as p:
+        loglike_grid = p.starmap(loglike_lamb, zip(grid, repeat(args, ngrid)))
+    lamb_max = grid[np.argmax(loglike_grid)]
+    # Refine grid around cs_max with 10% deviation below and 50% above
+    ngrid = 80
+    grid = np.linspace(0.9*lamb_max, 1.5*lamb_max, ngrid)
+    with Pool(16) as p:
+        loglike_grid = p.starmap(loglike_lamb, zip(grid, repeat(args, ngrid)))
+    lamb_max = grid[np.argmax(loglike_grid)]
+    return lamb_max
+
+
+def find_B(r_eft, xi_eft, xi_zel) -> float:
+    r_mask = (30 < r_eft) & (r_eft < 50)
+    B_grid = np.linspace(0.8, 1.2, 10_000)
+    loglike_grid = [loglike_B(b, (xi_eft[r_mask], xi_zel[r_mask]))
+                    for b in B_grid]
+    B_max = B_grid[np.argmax(loglike_grid)]
+    return B_max
+
+
+def xi_large_estimation_from_data(
     r: np.ndarray,
     xi: np.ndarray,
     xi_cov: np.ndarray,
@@ -309,7 +360,7 @@ def xi_large_estimation(
 
     """
     # Compute ZA
-    pk_lin_call, xi_lin_call, pk_zel_call, xi_zel_call = (
+    xi_lin_call, xi_zel_call, pk_lin_call, pk_zel_call = (
         zeldovich_approx_corr_func_prediction(
             h=h, Om=Om, Omb=Omb, ns=ns, sigma8=sigma8, z=z
         )
@@ -319,41 +370,10 @@ def xi_large_estimation(
 
     # Find the best value of cs that minimizes the eft prediction error at
     # intermediate scales
-    # ==========================================================================
-    r_mask = (40 < r) & (r < 80)
-    args = (k_lin, p_lin, r[r_mask], xi[r_mask], xi_cov[r_mask, :][:, r_mask])
-    # Define grids to estimate cs
-    ngrid = 16
-    grid = np.logspace(0, 1.2, ngrid)
-    with Pool(16) as p:
-        loglike_grid = p.starmap(loglike_cs, zip(grid, repeat(args, ngrid)))
-    cs_max = grid[np.argmax(loglike_grid)]
-    # Refine grid around cs_max with 10% deviation
-    ngrid = 80
-    grid = np.linspace(0.9*cs_max, 1.1*cs_max, ngrid)
-    with Pool(16) as p:
-        loglike_grid = p.starmap(loglike_cs, zip(grid, repeat(args, ngrid)))
-    cs_max = grid[np.argmax(loglike_grid)]
-    # ==========================================================================
+    cs_max = find_cs(k_lin, p_lin, r, xi, xi_cov)
 
     # Account for the box size effects on large scale Fourier modes
-    # ==========================================================================
-    r_mask = (40 < r) & (r < 150)
-    args = (k_lin, p_lin, r[r_mask], xi[r_mask], xi_cov[r_mask, :][:, r_mask],
-            cs_max, boxsize)
-    # Define grids to estimate cs
-    ngrid = 16
-    grid = np.logspace(-1.5, 0, ngrid)
-    with Pool(16) as p:
-        loglike_grid = p.starmap(loglike_lamb, zip(grid, repeat(args, ngrid)))
-    lamb_max = grid[np.argmax(loglike_grid)]
-    # Refine grid around cs_max with 10% deviation below and 50% above
-    ngrid = 80
-    grid = np.linspace(0.9*lamb_max, 1.5*lamb_max, ngrid)
-    with Pool(16) as p:
-        loglike_grid = p.starmap(loglike_lamb, zip(grid, repeat(args, ngrid)))
-    lamb_max = grid[np.argmax(loglike_grid)]
-    # ==========================================================================
+    lamb_max = find_lamb(k_lin, p_lin, r, xi, xi_cov, cs_max, boxsize)
 
     # Compute the 1-loop EFT approx.
     p_hat = power_spec_box_effect(k_lin, p_lin, boxsize, lamb_max)
@@ -366,20 +386,11 @@ def xi_large_estimation(
     xi_lin = xi_lin_call(r_eft)
     xi_zel = xi_zel_call(r_eft)
 
-    # Find the ratio between
-    # ==========================================================================
-    r_mask = (30 < r_eft) & (r_eft < 50)
-    B_grid = np.linspace(0.8, 1.2, 10_000)
-    loglike_grid = [loglike_B(b, (xi_eft[r_mask], xi_zel[r_mask]))
-                    for b in B_grid]
-    B_max = B_grid[np.argmax(loglike_grid)]
-    # ==========================================================================
+    # Find the ratio between EFT and ZA
+    B_max = find_B(r_eft, xi_eft, xi_zel)
 
     # Construct xi large
-    erf_transition = error_func_pos_incr(r_eft, 1.0, 40.0, 3.0)
-
-    xi_large = (1.0 - erf_transition) * B_max * xi_zel + \
-        erf_transition * xi_eft
+    xi_large = xi_large_construct(r_eft, xi_zel, xi_eft, B_max)
 
     power_spectra = (k_lin, p_lin, p_hat, p_eft, p_zel)
     corr_func = (r_eft, xi_lin, xi_eft, xi_zel,
