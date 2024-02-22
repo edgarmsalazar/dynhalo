@@ -302,10 +302,9 @@ def find_lamb(k_lin, p_lin, r, xi, xi_cov, cs_max, boxsize) -> float:
     return lamb_max
 
 
-def find_B(r_eft, xi_eft, xi_zel) -> float:
-    r_mask = (30 < r_eft) & (r_eft < 50)
+def find_B(xi_data, xi_zel) -> float:
     B_grid = np.linspace(0.8, 1.2, 10_000)
-    loglike_grid = [loglike_B(b, (xi_eft[r_mask], xi_zel[r_mask]))
+    loglike_grid = [loglike_B(b, (xi_data, xi_zel))
                     for b in B_grid]
     B_max = B_grid[np.argmax(loglike_grid)]
     return B_max
@@ -401,7 +400,8 @@ def xi_large_estimation_from_data(
     xi_zel = xi_zel_call(r_eft)
 
     # Find the ratio between EFT and ZA
-    B_max = find_B(r_eft, xi_eft, xi_zel)
+    r_mask = (30 < r_eft) & (r_eft < 50)
+    B_max = find_B(xi_eft[r_mask], xi_zel[r_mask])
 
     # Construct xi large
     xi_large = xi_large_construct(r_eft, xi_zel, xi_eft, B_max)
