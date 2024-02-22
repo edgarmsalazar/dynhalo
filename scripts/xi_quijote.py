@@ -3,7 +3,7 @@ import os
 import h5py
 import numpy as np
 
-from dhm.corrfunc.eft import xi_large_estimation
+from dhm.corrfunc.eft import xi_large_estimation_from_data
 from dhm.utils import timer
 
 
@@ -41,7 +41,7 @@ def load_quijote_cf(
 def xi_large_quijote() -> None:
     r_obs, xi_obs_mean, xi_obs_cov = load_quijote_cf()
     # Takes ~10 min
-    power_spectra, corr_func = xi_large_estimation(
+    power_spectra, corr_func = xi_large_estimation_from_data(
             r=r_obs,
             xi=xi_obs_mean,
             xi_cov=xi_obs_cov,
