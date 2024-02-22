@@ -167,10 +167,7 @@ def tpcf_jk(
     n_jk_samples = cells_per_side**3
 
     # Number of objects in d1 and d2
-    # TODO: Check if data_1 and data_2 are striclty necessary.
-    # n_obj_d1 = np.size(n_obj_d1, 0)
-    # n_obj_d2 = np.size(n_obj_d2, 0)
-    data_1_xx = np.arange(n_obj_d1)
+    data_1_row_idx = np.arange(n_obj_d1)
 
     # Volume of the box and spherical shells.
     volume_box = boxsize**3
@@ -189,9 +186,8 @@ def tpcf_jk(
     dd_pairs_removed_samples = dd_pairs_total[None, :] - dd_pairs
     for sample in range(n_jk_samples):
         # Number of objects in d1 after removing all objects in sample.
-        d1_total_sample = n_obj_d1 - np.size(data_1_xx[data_1_id[sample]], 0)
+        d1_total_sample = n_obj_d1 - np.size(data_1_row_idx[data_1_id[sample]], 0)
 
-        # xi_i[cell] = dd_pairs_i[cell] / (n1 * n2 * Vjk * Vshell) - 1
         xi_samples[sample] = (
             dd_pairs_removed_samples[sample]
             / (d1_total_sample * num_dens_d2 * volume_shell)
@@ -199,8 +195,6 @@ def tpcf_jk(
         )
 
     # Compute mean correlation function from all jk samples
-    # for i in range(n_bins):
-    # xi_mean[i] = np.mean(xi_samples[:, i])
     xi_mean = np.mean(xi_samples, axis=0)
 
     # Compute covariance matrix of the radial bins using all jk samples
