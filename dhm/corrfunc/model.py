@@ -91,10 +91,10 @@ def xi_inf_model(
     r_h: float,
     bias: float,
     xi_large: interp1d,
-    mu: float,
+    eta: float,
     gamma: float,
     r_inf: float,
-    eta: float,
+    mu: float,
 ) -> float:
     """Infall correlation function model. See equation (12) in Salazar et.al. (2024).
     The equations and figures referenced below are from the same article.
@@ -248,6 +248,25 @@ def rho_orb_model(r: float, morb: float, r_h: float, alpha: float, a: float) -> 
         Orbiting density profile
     """
     return morb * rho_orb_dens_dist(r=r, r_h=r_h, alpha=alpha, a=a)
+
+
+def xihm_model(
+    r: float,
+    morb: float,
+    r_h: float,
+    alpha: float,
+    a: float,
+    bias: float,
+    xi_large: interp1d,
+    eta: float,
+    gamma: float,
+    r_inf: float,
+    mu: float,
+    rhom: float,
+) -> float:
+    orb = rho_orb_model(r, morb, r_h, alpha, a) / rhom
+    inf = xi_inf_model(r, r_h, bias, xi_large, eta, gamma, r_inf, mu)
+    return orb + inf
 
 
 if __name__ == "__main__":
