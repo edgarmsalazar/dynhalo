@@ -168,7 +168,7 @@ def rho_orb_dist(x: float, alpha: float, a: float) -> float:
     Returns
     -------
     float
-        
+
     """
     alpha *= x / (a + x)
     return np.power(x / a, -alpha) * np.exp(-0.5 * x ** 2)
