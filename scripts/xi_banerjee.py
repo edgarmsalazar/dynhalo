@@ -73,7 +73,7 @@ def xi_large_banerjee() -> None:
     k_lin, p_lin, p_hat, p_eft, p_zel = power_spectra
     r_eft, xi_lin, xi_eft, xi_zel, xi_large, B_max, cs_max, lamb_max = corr_func
 
-    with h5py.File(os.getcwd() + '/scripts/data/xi_large_banerjee_2.hdf5', 'w') as hdf_save:
+    with h5py.File(os.getcwd() + '/scripts/data/xi_large_banerjee.hdf5', 'w') as hdf_save:
         hdf_save.create_dataset('k', data=k_lin)
         hdf_save.create_dataset('p_lin', data=p_lin)
         hdf_save.create_dataset('p_lin_hat', data=p_hat)

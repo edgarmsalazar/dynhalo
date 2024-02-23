@@ -11,7 +11,7 @@ def load_quijote_cf(
     path: str = '/spiff/edgarmsc/simulations/Quijote/CF/matter/fiducial/all/',
 ):
     # Find best cs by fitting xi_EFT to xi_mm from Quijote
-    file_name = os.getcwd() + '/scripts/data/ximm_quijote.hdf5'
+    file_name = os.getcwd() + '/scripts/data/xi_mm_quijote.hdf5'
     if not os.path.exists(file_name):
         n_obs = 15_000
 
