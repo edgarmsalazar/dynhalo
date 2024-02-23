@@ -128,7 +128,7 @@ def tpcf_jk(
     boxsize: float,
     gridsize: float,
 ) -> Tuple[np.ndarray]:
-    """Ultra-fast correlation function estimation
+    """Ultra-fast correlation function estimation with jackknife samples
 
     Parameters
     ----------
@@ -218,7 +218,7 @@ def cross_tpcf_jk(
     jk_estimates: bool = True,
 ) -> Tuple[np.ndarray]:
     """Compute the cross-correlation function between data 1 and data 2. It is
-    assumed that data 1
+    assumed that data 1...
 
     Parameters
     ----------
@@ -344,7 +344,7 @@ def density_jk(
     gridsize: float,
     mass: float,
 ) -> Tuple[np.ndarray]:
-    """_summary_
+    """Density profile jackknife samples
 
     Parameters
     ----------
@@ -385,7 +385,6 @@ def density_jk(
     n_jk_samples = cells_per_side**3
 
     # Data 1 index array
-    # n_obj_d1 = np.size(data_1, 0)
     data_1_xx = np.arange(n_obj_d1)
 
     rho_samples = np.zeros((n_jk_samples, n_bins))
@@ -430,7 +429,8 @@ def cross_tpcf_jk_radial(
     mass: float,
     jk_estimates: bool = True,
 ) -> Tuple[np.ndarray]:
-    """_summary_
+    """Compute the cross-correlation function between data 1 and data 2. It is
+    assumed that data 1...
 
     Parameters
     ----------
