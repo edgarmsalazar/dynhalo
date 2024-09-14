@@ -9,7 +9,7 @@ from tqdm import tqdm
 from dynhalo.finder.coordinates import (get_vr_vt_from_coordinates,
                                         relative_coordinates)
 from dynhalo.finder.catalogue import find_r200_m200
-from dynhalo.finder.minibox import get_sub_box_id, load_particles
+from dynhalo.finder.minibox import get_mini_box_id, load_particles
 from dynhalo.utils import G_gravity, timer
 
 
@@ -18,7 +18,7 @@ def _select_particles_around_haloes(
     n_seeds: int,
     r_max: float,
     boxsize: float,
-    subsize: float,
+    minisize: float,
     file_seeds: str,
     path: str,
     part_mass: float,
@@ -35,12 +35,12 @@ def _select_particles_around_haloes(
         Maximum distance to consider
     boxsize : float
         Size of simulation box
-    subsize : float
-        Size of sub-box
+    minisize : float
+        Size of mini box
     file_seeds : str
         File containing the seeds, including path.
     path : str
-        Path to the sub-boxes
+        Path to the mini boxes
     part_mass : float
         Mass per particle
     rhom : float
@@ -76,32 +76,32 @@ def _select_particles_around_haloes(
     pos_seed = pos_seed[order][:n_seeds]
     vel_seed = vel_seed[order][:n_seeds]
 
-    # Locate sub-box IDs for all seeds.
-    seed_sub_box_id = get_sub_box_id(pos_seed, boxsize, subsize)
-    # Sort by sub-box ID
-    order = np.argsort(seed_sub_box_id)
-    seed_sub_box_id = seed_sub_box_id[order]
+    # Locate mini box IDs for all seeds.
+    seed_mini_box_id = get_mini_box_id(pos_seed, boxsize, minisize)
+    # Sort by mini box ID
+    order = np.argsort(seed_mini_box_id)
+    seed_mini_box_id = seed_mini_box_id[order]
     vmax = vmax[order]
     hid = hid[order]
     pos_seed = pos_seed[order]
     vel_seed = vel_seed[order]
 
-    # Get unique sub-box ids
-    unique_sub_box_ids = np.unique(seed_sub_box_id)
+    # Get unique mini box ids
+    unique_mini_box_ids = np.unique(seed_mini_box_id)
 
     # Create empty lists (containers) to save the data from file for each ID
     r, vr, lnv2 = ([] for _ in range(3))
-    # Iterate over sub-box IDs
+    # Iterate over mini box IDs
     # NOTE: Could parallelise this but it is not super slow
-    for sub_box_id in tqdm(unique_sub_box_ids, desc='Processing sub-box',
+    for mini_box_id in tqdm(unique_mini_box_ids, desc='Processing mini box',
                         colour='blue', ncols=100):
-        pos, vel, _, _ = load_particles(sub_box_id, boxsize, subsize, path)
+        pos, vel, _, _ = load_particles(mini_box_id, boxsize, minisize, path)
 
-        # Iterate over seeds in current sub-box ID
-        mask_seeds_in_sub_box = seed_sub_box_id == sub_box_id
-        for i in range(mask_seeds_in_sub_box.sum()):
+        # Iterate over seeds in current mini box ID
+        mask_seeds_in_mini_box = seed_mini_box_id == mini_box_id
+        for i in range(mask_seeds_in_mini_box.sum()):
             # Compute the relative positions of all particles in the box
-            rel_pos = relative_coordinates(pos_seed[mask_seeds_in_sub_box][i], pos,
+            rel_pos = relative_coordinates(pos_seed[mask_seeds_in_mini_box][i], pos,
                                            boxsize)
             # Only work with those close to the seed
             mask_x = np.abs(rel_pos[:, 0]) <= r_max
@@ -111,7 +111,7 @@ def _select_particles_around_haloes(
 
             # pos_i = pos[mask_close]
             rel_pos = rel_pos[mask_close]
-            rel_vel = vel[mask_close] - vel_seed[mask_seeds_in_sub_box][i]
+            rel_vel = vel[mask_close] - vel_seed[mask_seeds_in_mini_box][i]
             # Compute R200 and M200
             r200, m200, _, _ = find_r200_m200(rel_pos, part_mass, rhom)
             # Compute V200
@@ -141,7 +141,7 @@ def get_calibration_data(
     n_seeds: int,
     r_max: float,
     boxsize: float,
-    subsize: float,
+    minisize: float,
     file_seeds: str,
     path: str,
     part_mass: float,
@@ -157,12 +157,12 @@ def get_calibration_data(
         Maximum distance to consider
     boxsize : float
         Size of simulation box
-    subsize : float
-        Size of sub-box
+    minisize : float
+        Size of mini box
     file_seeds : str
         File containing the seeds, including path.
     path : str
-        Path to the sub-boxes
+        Path to the mini boxes
     part_mass : float
         Mass per particle
     rhom : float
@@ -185,7 +185,7 @@ def get_calibration_data(
             n_seeds,
             r_max,
             boxsize,
-            subsize,
+            minisize,
             file_seeds,
             path,
             part_mass,
@@ -202,7 +202,7 @@ def get_calibration_data(
 
 def cost_percentile(b: float, *data) -> float:
     """Cost function for y-intercept b parameter. The optimal value of b is such
-    that the `target` percentile of paricles is below the line.
+    that the `target` percentile of particles is below the line.
 
     Parameters
     ----------
@@ -292,7 +292,7 @@ def calibrate_finder(
     n_seeds: int,
     r_max: float,
     boxsize: float,
-    subsize: float,
+    minisize: float,
     file_seeds: str,
     path: str,
     part_mass: float,
@@ -312,12 +312,12 @@ def calibrate_finder(
         Maximum distance to consider
     boxsize : float
         Size of simulation box
-    subsize : float
-        Size of sub-box
+    minisize : float
+        Size of mini box
     file_seeds : str
         File containing the seeds, including path.
     path : str
-        Path to the sub-boxes
+        Path to the mini boxes
     part_mass : float
         Mass per particle
     rhom : float
@@ -335,7 +335,7 @@ def calibrate_finder(
         n_seeds=n_seeds,
         r_max=r_max,
         boxsize=boxsize,
-        subsize=subsize,
+        minisize=minisize,
         file_seeds=file_seeds,
         path=path,
         part_mass=part_mass,

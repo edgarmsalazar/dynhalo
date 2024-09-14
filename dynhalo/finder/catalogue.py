@@ -84,18 +84,18 @@ def classify(
     return mask_orb
 
 
-def classify_seeds_in_sub_box(
-    sub_box_id: int,
+def classify_seeds_in_mini_box(
+    mini_box_id: int,
     min_num_part: int,
     part_mass: float,
     rhom: float,
     boxsize: float,
-    subsize: float,
+    minisize: float,
     path: str,
     dir_name: str,
     padding: float = 5.0,
 ) -> None:
-    """Runs the classifier for each seed in a sub-box.
+    """Runs the classifier for each seed in a mini box.
     Additionally, percolates all found haloes by:
         1. Resolves parent-sub halo relationship by only allowing less massive
            structures to orbit more massive ones.
@@ -115,7 +115,7 @@ def classify_seeds_in_sub_box(
 
     Parameters
     ----------
-    sub_box_id : int
+    mini_box_id : int
         Sub-box ID
     min_num_part : int
         Minimum number of particles needed to be considered a halo
@@ -125,25 +125,25 @@ def classify_seeds_in_sub_box(
         Matter density of the universe
     boxsize : float
         Size of simulation box
-    subsize : float
-        Size of sub-box
+    minisize : float
+        Size of mini box
     path : str
         Location from where to load the file
     padding : float
-        Only particles up to this distance from the sub-box edge are considered 
+        Only particles up to this distance from the mini box edge are considered 
         for classification. Defaults to 5
 
     Returns
     -------
     None
     """
-    save_path = path + f'run_{dir_name}/sub_box_catalogues/'
+    save_path = path + f'run_{dir_name}/mini_box_catalogues/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
     # Load seeds
-    pos_seed, vel_seed, hid_seed, row_seed = load_seeds(sub_box_id, boxsize,
-                                                        subsize, path, padding)
+    pos_seed, vel_seed, hid_seed, row_seed = load_seeds(mini_box_id, boxsize,
+                                                        minisize, path, padding)
     if any([p is None for p in (pos_seed, vel_seed, hid_seed, row_seed)]):
         return None
     hid_seed_sb = hid_seed
@@ -151,7 +151,7 @@ def classify_seeds_in_sub_box(
     # n_seeds = len(hid_seed)
     # Load adjacent seeds
     pos_seed_adj, vel_seed_adj, hid_seed_adj, row_seed_adj = load_seeds(
-        sub_box_id, boxsize, subsize, path, padding, adjacent=True)
+        mini_box_id, boxsize, minisize, path, padding, adjacent=True)
     # Concatenate seeds
     hid_seed = np.hstack([hid_seed, hid_seed_adj])
     hid_seed = np.hstack([hid_seed, hid_seed_adj])
@@ -164,8 +164,8 @@ def classify_seeds_in_sub_box(
     n_seeds = len(hid_seed)
 
     # Load particles
-    pos_part, vel_part, pid_part, row_part = load_particles(sub_box_id, boxsize,
-                                                            subsize, path,
+    pos_part, vel_part, pid_part, row_part = load_particles(mini_box_id, boxsize,
+                                                            minisize, path,
                                                             padding)
 
     # Create empty catalog of found halos and a dictionary with the PIDs. The
@@ -423,7 +423,7 @@ def classify_seeds_in_sub_box(
     haloes['PID'] = pids[mask_in_sb][mask_mass]
 
     # Save catalogue ===========================================================
-    with h5.File(save_path + f'{sub_box_id}.hdf5', 'w') as hdf:
+    with h5.File(save_path + f'{mini_box_id}.hdf5', 'w') as hdf:
         # Save halo catalogue
         for i, key in enumerate(haloes.columns):
             if key in ["pos", "vel"]:
@@ -457,7 +457,7 @@ def generate_full_box_catalogue(
     part_mass: float,
     rhom: float,
     boxsize: float,
-    subsize: float,
+    minisize: float,
     dir_name: str,
     padding: float = 5.0,
     n_threads: int = None,
@@ -477,10 +477,10 @@ def generate_full_box_catalogue(
         Matter density of the universe
     boxsize : float
         Size of simulation box
-    subsize : float
-        Size of sub-box
+    minisize : float
+        Size of mini box
     padding : float, optional
-        Only particles up to this distance from the sub-box edge are considered 
+        Only particles up to this distance from the mini box edge are considered 
         for classification. Defaults to 5
     n_threads : int
         Number of threads
@@ -490,19 +490,19 @@ def generate_full_box_catalogue(
     None
     """
     # Create directory if it does not exist
-    save_path = path + f'run_{dir_name}/sub_box_catalogues/'
+    save_path = path + f'run_{dir_name}/mini_box_catalogues/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
-    n_sub_boxes = np.int_(np.ceil(boxsize / subsize))**3
+    n_mini_boxes = np.int_(np.ceil(boxsize / minisize))**3
 
-    func = partial(classify_seeds_in_sub_box, min_num_part=min_num_part,
+    func = partial(classify_seeds_in_mini_box, min_num_part=min_num_part,
                    part_mass=part_mass, rhom=rhom, boxsize=boxsize, path=path,
-                   subsize=subsize, padding=padding, dir_name=dir_name)
+                   minisize=minisize, padding=padding, dir_name=dir_name)
 
     with Pool(n_threads) as pool:
-        list(tqdm(pool.imap(func, range(n_sub_boxes)),
-                  total=n_sub_boxes, colour="green", ncols=100,
+        list(tqdm(pool.imap(func, range(n_mini_boxes)),
+                  total=n_mini_boxes, colour="green", ncols=100,
                   desc='Generating halo catalogue'))
 
     # Consolidate catalogue
