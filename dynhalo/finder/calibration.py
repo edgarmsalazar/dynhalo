@@ -6,9 +6,9 @@ import numpy as np
 from scipy.optimize import curve_fit, minimize
 from tqdm import tqdm
 
+from dynhalo.finder.catalogue import find_r200_m200
 from dynhalo.finder.coordinates import (get_vr_vt_from_coordinates,
                                         relative_coordinates)
-from dynhalo.finder.catalogue import find_r200_m200
 from dynhalo.finder.minibox import get_mini_box_id, load_particles
 from dynhalo.utils import G_gravity, timer
 

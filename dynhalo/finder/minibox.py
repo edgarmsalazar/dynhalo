@@ -5,8 +5,8 @@ import h5py as h5
 import numpy as np
 from tqdm import tqdm
 
-from dynhalo.utils import cartesian_product, get_np_unit_dytpe, timer
 from dynhalo.finder.coordinates import relative_coordinates
+from dynhalo.utils import cartesian_product, get_np_unit_dytpe, timer
 
 
 def generate_mini_box_grid(
