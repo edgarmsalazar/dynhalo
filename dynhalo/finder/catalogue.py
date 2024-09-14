@@ -12,7 +12,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from dynhalo.finder.coordinates import relative_coordinates
-from dynhalo.finder.subbox import load_particles, load_seeds
+from dynhalo.finder.minibox import load_particles, load_seeds
 from dynhalo.utils import G_gravity, timer
 
 filterwarnings('ignore')

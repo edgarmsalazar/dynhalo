@@ -1,6 +1,6 @@
 import numpy as np
 # import pytest
-from dynhalo.finder.subbox import get_adjacent_sub_box_ids, get_sub_box_id
+from dynhalo.finder.minibox import get_adjacent_sub_box_ids, get_sub_box_id
 from dynhalo.utils import cartesian_product
 
 # Generate 3D synthetic data. 100 u subvolumes in a 1000 u box.
