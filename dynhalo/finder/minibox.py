@@ -189,8 +189,6 @@ def generate_mini_box_ids(
         else:
             upp = None
         ids[low:upp] = get_mini_box_id(positions[low:upp], boxsize, minisize)
-        # if np.max(ids) > boxes_per_side**3:
-            # print(chunk)
 
     if name:
         file_name = f'mini_box_id_{name}.hdf5'
