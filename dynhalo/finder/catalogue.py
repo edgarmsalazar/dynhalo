@@ -25,11 +25,11 @@ def find_r200_m200(rel_pos, part_mass, rhom):
     mass_prof = part_mass * np.arange(1, len(dists)+1)
     loc = np.argmax(mass_prof / (4 / 3 * np.pi * dists ** 3) <= 200 * rhom)
     loc2 = np.argmax(mass_prof / (4 / 3 * np.pi * dists ** 3) <= 5000 * rhom)
-    # vel_prof_sq = G_gravity * mass_prof / dists
+    vel_prof_sq = G_gravity * mass_prof / dists
     argloc = np.argsort(dists)[:loc2]
 
     # return dists[loc], mass_prof[loc], np.max(vel_prof_sq)
-    return dists[loc], mass_prof[loc], dists[loc2], argloc
+    return dists[loc], mass_prof[loc], dists[loc2], argloc, np.max(vel_prof_sq)
 
 
 def classify(
@@ -92,6 +92,7 @@ def classify_seeds_in_sub_box(
     boxsize: float,
     subsize: float,
     path: str,
+    dir_name: str,
     padding: float = 5.0,
 ) -> None:
     """Runs the classifier for each seed in a sub-box.
@@ -136,7 +137,9 @@ def classify_seeds_in_sub_box(
     -------
     None
     """
-    save_path = path + 'sub_box_catalogues/'
+    save_path = path + f'run_{dir_name}/sub_box_catalogues/'
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
 
     # Load seeds
     pos_seed, vel_seed, hid_seed, row_seed = load_seeds(sub_box_id, boxsize,
@@ -169,6 +172,8 @@ def classify_seeds_in_sub_box(
     # temporary objects are to save raw results before percolation.
     halo_members = {}
     halo_members_temp = {}
+    halo_non_members = {}
+    halo_non_members_temp = {}
     halo_subs = {}
     halo_subs_temp = {}
 
@@ -187,14 +192,14 @@ def classify_seeds_in_sub_box(
         rel_pos = relative_coordinates(pos_seed[i], pos_part, boxsize)
         rel_vel = vel_part - vel_seed[i]
         # r200, m200, vmax = find_r200_m200(rel_pos, part_mass, rhom)
-        r200, m200, r5000, argloc = find_r200_m200(rel_pos, part_mass, rhom)
+        r200, m200, r5000, argloc, vmax = find_r200_m200(rel_pos, part_mass, rhom)
         # Classify
         mask_orb = classify(rel_pos, rel_vel, r200, m200, pars)
         # Compute phase space distance from particle to halo
-        # sigmax = vmax**2 / (G_gravity * 200 * rhom * 4 * np.pi / 3)
-        sigmax = r5000**2
-        # sigmav = np.var(rel_vel)
-        sigmav = np.median(np.sum(np.square(rel_vel[argloc]), axis=1))
+        sigmax = vmax**2 / (G_gravity * 200 * rhom * 4 * np.pi / 3)
+        sigmav = np.var(rel_vel)
+        # sigmax = r5000**2
+        # sigmav = np.median(np.sum(np.square(rel_vel[argloc]), axis=1))
         dphsq = np.sum(np.square(rel_pos), axis=1) / sigmax + \
             np.sum(np.square(rel_vel), axis=1) / sigmav
 
@@ -223,6 +228,10 @@ def classify_seeds_in_sub_box(
                                           'row_idx': orb_arg,
                                           'dph': orb_dph,
                                           }
+        # Save non-members up to a padding distance. This is helpful for 
+        # computing density profiles of non-orbiting particles.
+        non_members_mask = np.sum(np.square(rel_pos), axis=1) < 2 * padding
+        halo_non_members_temp[hid_seed[i]] = row_part[~mask_orb*non_members_mask]
 
         # Classify seeds =======================================================
         mask_self = hid_seed != hid_seed[i]
@@ -392,6 +401,7 @@ def classify_seeds_in_sub_box(
                     'PID': halo_members_temp[hid]['PID'],
                     'row_idx': halo_members_temp[hid]['row_idx'],
                 }
+            halo_non_members[hid] = halo_non_members_temp[hid]
 
     # Update Morb
     mask_in_sb = np.isin(haloes_temp['OHID'], hid_seed_sb)
@@ -429,6 +439,8 @@ def classify_seeds_in_sub_box(
                                data=halo_members[item]['PID'])
             hdf.create_dataset(f'members/part/{str(item)}/row_idx',
                                data=halo_members[item]['row_idx'])
+            hdf.create_dataset(f'non_members/part/{str(item)}/row_idx',
+                               data=halo_non_members[item])
         # Save halo members (seed)
         if len(halo_subs.keys()) > 0:
             for item, _ in halo_subs.items():
@@ -446,9 +458,9 @@ def generate_full_box_catalogue(
     rhom: float,
     boxsize: float,
     subsize: float,
+    dir_name: str,
     padding: float = 5.0,
     n_threads: int = None,
-    # hdf: bool = False,
 ) -> None:
     """Generates a halo catalogue using the kinetic mass criterion to classify
     particles into orbiting or infalling.
@@ -478,15 +490,15 @@ def generate_full_box_catalogue(
     None
     """
     # Create directory if it does not exist
-    save_path = path + 'sub_box_catalogues/'
+    save_path = path + f'run_{dir_name}/sub_box_catalogues/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
     n_sub_boxes = np.int_(np.ceil(boxsize / subsize))**3
 
     func = partial(classify_seeds_in_sub_box, min_num_part=min_num_part,
-                   part_mass=part_mass, rhom=rhom, boxsize=boxsize,
-                   subsize=subsize, path=path, padding=padding)
+                   part_mass=part_mass, rhom=rhom, boxsize=boxsize, path=path,
+                   subsize=subsize, padding=padding, dir_name=dir_name)
 
     with Pool(n_threads) as pool:
         list(tqdm(pool.imap(func, range(n_sub_boxes)),
@@ -510,8 +522,8 @@ def generate_full_box_catalogue(
     ohid = np.concatenate(ohid)
     # NOTE: Redundant?
     _, index = np.unique(ohid, return_index=True)
-
-    with h5.File(path + 'halo_catalogue.hdf5', 'w') as hdf:
+    
+    with h5.File(path + f'run_{dir_name}/halo_catalogue.hdf5', 'w') as hdf:
         hdf.create_dataset('M200m', data=np.concatenate(m200m)[index])
         hdf.create_dataset('R200m', data=np.concatenate(r200m)[index])
         hdf.create_dataset('OHID', data=ohid[index])
@@ -521,7 +533,7 @@ def generate_full_box_catalogue(
         hdf.create_dataset('vel', data=np.concatenate(vel)[index])
 
     # Consolidate members catalogue
-    with h5.File(path + 'halo_members.hdf5', 'w') as hdf:
+    with h5.File(path + f'run_{dir_name}/halo_members.hdf5', 'w') as hdf:
         for f in tqdm(files, ncols=100, desc='Consolidating members', colour='green'):
             with h5.File(save_path+f, 'r') as hdf_load:
                 if 'members' in hdf_load.keys():
@@ -530,6 +542,8 @@ def generate_full_box_catalogue(
                             f'{hid}/PID', data=hdf_load[f'members/part/{hid}/PID'][()])
                         hdf.create_dataset(
                             f'{hid}/row_idx', data=hdf_load[f'members/part/{hid}/row_idx'][()])
+                        hdf.create_dataset(
+                            f'{hid}/row_idx_inf', data=hdf_load[f'non_members/part/{hid}/row_idx'][()])
 
     return
 
