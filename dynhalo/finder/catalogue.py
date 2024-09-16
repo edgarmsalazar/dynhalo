@@ -378,7 +378,7 @@ def classify_seeds_in_mini_box(
     pids_to_remove_keys = pids_to_remove.keys()
 
     removed_haloes = []
-    # Create a new members catalogue, removing particles form haloes.
+    # Create a new members catalogue, removing particles from haloes.
     for hid in members_keys:
         if hid in hid_seed_sb:
             if hid in pids_to_remove_keys:
