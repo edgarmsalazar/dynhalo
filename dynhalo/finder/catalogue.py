@@ -410,7 +410,7 @@ def classify_seeds_in_mini_box(
         if hid in removed_haloes:
             continue
         mass_new[i] = part_mass * len(halo_members[hid]['PID'])
-    # Select haloes in subbox
+    # Select haloes in mini box
     haloes = haloes_temp[mask_in_sb]
     mask_mass = mass_new > 0
     
