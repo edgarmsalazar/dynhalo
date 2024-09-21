@@ -6,7 +6,7 @@ import numpy as np
 from scipy.optimize import curve_fit, minimize
 from tqdm import tqdm
 
-from dynhalo.finder.catalogue import find_r200_m200
+from dynhalo.finder.catalogue import compute_halo_properties
 from dynhalo.finder.coordinates import (get_vr_vt_from_coordinates,
                                         relative_coordinates)
 from dynhalo.finder.minibox import get_mini_box_id, load_particles
@@ -113,7 +113,7 @@ def _select_particles_around_haloes(
             rel_pos = rel_pos[mask_close]
             rel_vel = vel[mask_close] - vel_seed[mask_seeds_in_mini_box][i]
             # Compute R200 and M200
-            r200, m200, _, _ = find_r200_m200(rel_pos, part_mass, rhom)
+            r200, m200, _, _, _ = compute_halo_properties(rel_pos, rel_vel, part_mass, rhom)
             # Compute V200
             v200sq = G_gravity * m200 / r200
             # Compute radial and tangential velocity
