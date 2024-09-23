@@ -146,8 +146,8 @@ def generate_mini_box_ids(
     positions: np.ndarray,
     boxsize: float,
     minisize: float,
-    chunksize: float,
     path: str,
+    chunksize: int = 100_000,
     name: str = None
 ) -> None:
     """Gets the mini box ID for each position
@@ -160,10 +160,10 @@ def generate_mini_box_ids(
         Size of simulation box
     minisize : float
         Size of mini box
-    chunksize : float
-        Number of items to process at a time in chunks
     path : str
         Where to save the IDs
+    chunksize : int, optional
+        Number of items to process at a time in chunks, by default 100_000
     name : str, optional
         An additional name or identifier appended at the end of the file name, 
         by default None
@@ -201,15 +201,12 @@ def generate_mini_box_ids(
 
 
 @timer
-def split_simulation_into_mini_boxes(
+def split_box_into_mini_boxes(
     positions: np.ndarray,
     velocities: np.ndarray,
-    ids: np.ndarray,
-    boxsize: float,
-    minisize: float,
-    chunksize: float,
-    dtypes: list,
+    pid: np.ndarray,
     path: str,
+    chunksize: int = 100_000,
     name: str = None,
 ) -> None:
     """Sorts all items into mini boxes and saves them in disc.
@@ -217,21 +214,15 @@ def split_simulation_into_mini_boxes(
     Parameters
     ----------
     positions : np.ndarray
-        _description_
+        Cartesian coordinates
     velocities : np.ndarray
-        _description_
-    ids : np.ndarray
+        Cartesian velocities
+    pid : np.ndarray
         Unique IDs for each position (e.g. PID, HID)
-    boxsize : float
-        Size of simulation box
-    minisize : float
-        Size of mini box
-    chunksize : float
-        Number of items to process at a time in chunks
-    dtypes : list
-        Data types for positions and velocities
     path : str
         Where to save the IDs
+    chunksize : int, optional
+        Number of items to process at a time in chunks, by default 100_000
     name : str, optional
         An additional name or identifier appended at the end of the file name, 
         by default None
@@ -239,110 +230,98 @@ def split_simulation_into_mini_boxes(
     Returns
     -------
     None
-
-    Raises
-    ------
-    ValueError
-        If the chunksize is larger than the number of items
     """
-    # Check chunksize is smaller than the number of items
-    n_items = positions.shape[0]
-    if chunksize > n_items:
-        raise ValueError(
-            f"The specified chunksize {chunksize} is larger than the number of items {n_items}")
-
     # Create directory if it does not exist
-    save_path = path + 'mini_boxes/'
+    save_path = path + 'mini_boxes_new/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-
-    if not os.path.exists(save_path):
-        generate_mini_box_ids(positions, boxsize, minisize,
-                             chunksize, path, name)
 
     if name:
         mini_box_ids_file = path + f'mini_box_id_{name}.hdf5'
     else:
         mini_box_ids_file = path + f'mini_box_id.hdf5'
+    
     with h5.File(mini_box_ids_file, 'r') as hdf:
         mini_box_ids = hdf['MBID'][()]
 
-    n_iter = n_items // chunksize
+    mb_order = np.argsort(mini_box_ids)
 
+    # Get smallest data type to represent IDs
+    uint_dtype_pid = get_np_unit_dytpe(np.max(pid))
+
+    # Get smallest data type to represent the row index of each item
+    n_items = mini_box_ids.shape[0]
     uint_dtype_row = get_np_unit_dytpe(n_items)
     row_idx = np.arange(n_items, dtype=uint_dtype_row)
+    
+    # Sort data by mini box id
+    mb_order = np.argsort(mini_box_ids)
+    mini_box_ids = mini_box_ids[mb_order]
+    velocities = velocities[mb_order]
+    positions = positions[mb_order]
+    row_idx = row_idx[mb_order]
+    pid = pid[mb_order]
 
-    uint_dtype_ids = get_np_unit_dytpe(np.max(ids))
-    for chunk in tqdm(range(n_iter), desc='Chunk', ncols=100, colour='blue'):
-        # Select chunk
-        low = chunk * chunksize
-        if chunk < n_iter - 2:
-            upp = (chunk + 1) * chunksize
+    # Get chunk slices
+    n_items = mini_box_ids.shape[0]
+
+    chunk_idx = [0,]
+    i, upp = 0, 0
+    while True:
+        low = chunk_idx[-1]
+        upp = low + chunksize
+        if upp < n_items:
+            idx = low + np.argmin(mini_box_ids[low:] - mini_box_ids[upp])
+            chunk_idx.append(idx)
+            i += 1
         else:
-            upp = None
-        mb_ids = mini_box_ids[low:upp]
-        pos = positions[low:upp]
-        vel = velocities[low:upp]
-        pid = ids[low:upp]
-        row = row_idx[low:upp]
+            idx = -1
+            chunk_idx.append(idx)
+            break
 
-        mb_unique = np.unique(mb_ids)
-        order = np.argsort(mb_ids)
-        # Save all items at each unique mini box ID
-        for mini_box in mb_unique:
-            left = np.searchsorted(mb_ids, mini_box, side="left", sorter=order)
-            right = np.searchsorted(
-                mb_ids, mini_box, side="right", sorter=order)
+    
+    labels = ('ID', 'pos', 'vel', 'row_idx')
+    dtypes = (uint_dtype_pid, np.float32, np.float32, uint_dtype_row)
 
-            pos_item = pos[order][left:right]
-            vel_item = vel[order][left:right]
-            pid_item = pid[order][left:right]
-            row_item = row[order][left:right]
+    # For each chunk
+    for chunk_i in tqdm(range(len(chunk_idx)-1), desc='Processing chunks',
+                        ncols=100, colour='blue'):
+        # Select chunk
+        low = chunk_idx[chunk_i]
+        upp = chunk_idx[chunk_i + 1]
 
-            with h5.File(save_path + f"{mini_box}.hdf5", "a") as hdf:
+        mb_chunk = mini_box_ids[low : upp]
+        pos_chunk = positions[low : upp]
+        vel_chunk = velocities[low : upp]
+        pid_chunk = pid[low : upp]
+        row_chunk = row_idx[low : upp]
+
+        # Check which mini box ids are in the chunk
+        mb_chunk_low = mb_chunk[0]
+        mb_chunk_upp = mb_chunk[-1] + 1
+
+        # Get index (search sorted style) of the first occurence of each distinct 
+        # mini box id. Append a -1 at the end for completeness.
+        indexed_slice = []
+        for mb_id in range(mb_chunk_low, mb_chunk_upp):
+            indexed_slice.append(np.argmin(mb_chunk - mb_id))
+        indexed_slice.append(-1)
+
+        # Save data per slice
+        for i, mb_id in enumerate(range(mb_chunk_low, mb_chunk_upp)):
+            data = (
+                pid_chunk[indexed_slice[i] : indexed_slice[i+1]],
+                pos_chunk[indexed_slice[i] : indexed_slice[i+1]],
+                vel_chunk[indexed_slice[i] : indexed_slice[i+1]],
+                row_chunk[indexed_slice[i] : indexed_slice[i+1]],
+            )
+            with h5.File(save_path + f'{mb_id}.hdf5', 'a') as hdf:
                 if not name in hdf.keys():
                     hdf.create_group(name)
 
-                # If it is the first time opening this file, create datasets
-                if not 'ID' in hdf[name].keys():
-                    hdf.create_dataset(
-                        name=f'{name}/ID',
-                        data=pid_item,
-                        maxshape=(None, ),
-                        dtype=uint_dtype_ids,
-                    )
-                    hdf.create_dataset(
-                        name=f'{name}/pos',
-                        data=pos_item,
-                        maxshape=(None, pos_item.shape[-1]),
-                        dtype=dtypes[0],
-                    )
-                    hdf.create_dataset(
-                        name=f'{name}/vel',
-                        data=vel_item,
-                        maxshape=(None, vel_item.shape[-1]),
-                        dtype=dtypes[1],
-                    )
-                    hdf.create_dataset(
-                        name=f'{name}/row_idx',
-                        data=row_item,
-                        maxshape=(None, ),
-                        dtype=uint_dtype_row,
-                    )
-                # If it is not the first time opening the file, reshape the
-                # datasets
-                else:
-                    last_item = pid_item.shape[0]
-                    new_shape = hdf[f'{name}/ID'].shape[0] + last_item
-
-                    hdf[f'{name}/ID'].resize((new_shape), axis=0)
-                    hdf[f'{name}/ID'][-last_item:] = pid_item
-                    hdf[f'{name}/pos'].resize((new_shape), axis=0)
-                    hdf[f'{name}/pos'][-last_item:] = pos_item
-                    hdf[f'{name}/vel'].resize((new_shape), axis=0)
-                    hdf[f'{name}/vel'][-last_item:] = vel_item
-                    hdf[f'{name}/row_idx'].resize((new_shape), axis=0)
-                    hdf[f'{name}/row_idx'][-last_item:] = row_item
+                for (label_i, data_i, dtype_i) in zip(labels, data, dtypes):
+                    hdf.create_dataset(name=f'{name}/{label_i}', data=data_i,
+                                       dtype=dtype_i)
 
     return None
 
