@@ -6,7 +6,6 @@ from typing import List, Tuple, Union
 from warnings import filterwarnings
 
 import h5py as h5
-import numba
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -18,18 +17,30 @@ from dynhalo.utils import G_gravity, timer
 filterwarnings('ignore')
 
 
-@numba.njit()
-def find_r200_m200(rel_pos, part_mass, rhom):
+def compute_halo_properties(rel_pos, rel_vel, part_mass, rhom, delta: int = 5000):
     dists = np.sqrt(np.sum(np.square(rel_pos), axis=1))
-    dists.sort()
-    mass_prof = part_mass * np.arange(1, len(dists)+1)
-    loc = np.argmax(mass_prof / (4 / 3 * np.pi * dists ** 3) <= 200 * rhom)
-    loc2 = np.argmax(mass_prof / (4 / 3 * np.pi * dists ** 3) <= 5000 * rhom)
-    vel_prof_sq = G_gravity * mass_prof / dists
-    argloc = np.argsort(dists)[:loc2]
+    argsort = np.argsort(dists)
 
-    # return dists[loc], mass_prof[loc], np.max(vel_prof_sq)
-    return dists[loc], mass_prof[loc], dists[loc2], argloc, np.max(vel_prof_sq)
+    dists = dists[argsort]
+    velsq = np.sum(np.square(rel_vel), axis=1)[argsort]
+    mass_prof = part_mass * np.arange(1, len(dists)+1)
+
+    # Get R200 and M200
+    loc = np.argmax(mass_prof / (4 / 3 * np.pi * dists ** 3) <= 200 * rhom)
+    r200 = dists[loc]
+    m200 = mass_prof[loc]
+
+    # Get R_Delta
+    loc2 = np.argmax(mass_prof / (4 / 3 * np.pi * dists ** 3) <= delta * rhom)
+    sigma_x = dists[loc2]**2
+
+    # Get v_max
+    vel_prof_sq = G_gravity * mass_prof / dists
+    vmax = np.max(vel_prof_sq)
+
+    sigma_v = np.median(velsq[:loc2])
+
+    return r200, m200, sigma_x, sigma_v, vmax
 
 
 def classify(
@@ -192,7 +203,8 @@ def classify_seeds_in_mini_box(
         rel_pos = relative_coordinates(pos_seed[i], pos_part, boxsize)
         rel_vel = vel_part - vel_seed[i]
         # r200, m200, vmax = find_r200_m200(rel_pos, part_mass, rhom)
-        r200, m200, r5000, argloc, vmax = find_r200_m200(rel_pos, part_mass, rhom)
+        r200, m200, _, _, vmax = \
+            compute_halo_properties(rel_pos, rel_vel, part_mass, rhom)
         # Classify
         mask_orb = classify(rel_pos, rel_vel, r200, m200, pars)
         # Compute phase space distance from particle to halo
