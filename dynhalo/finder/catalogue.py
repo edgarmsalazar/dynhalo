@@ -2,7 +2,7 @@ import os
 from collections import defaultdict
 from functools import partial
 from multiprocessing import Pool
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, Any
 from warnings import filterwarnings
 
 import h5py as h5
@@ -17,7 +17,7 @@ from dynhalo.utils import G_gravity, timer
 filterwarnings('ignore')
 
 
-def compute_halo_properties(rel_pos, rel_vel, part_mass, rhom, delta: int = 5000):
+def compute_halo_properties(rel_pos, rel_vel, part_mass, rhom, delta: Any = 'rockstar'):
     dists = np.sqrt(np.sum(np.square(rel_pos), axis=1))
     argsort = np.argsort(dists)
 
@@ -30,17 +30,20 @@ def compute_halo_properties(rel_pos, rel_vel, part_mass, rhom, delta: int = 5000
     r200 = dists[loc]
     m200 = mass_prof[loc]
 
-    # Get R_Delta
-    loc2 = np.argmax(mass_prof / (4 / 3 * np.pi * dists ** 3) <= delta * rhom)
-    sigma_x = dists[loc2]**2
+    if delta == 'rockstar':
+        # Get v_max
+        vel_prof_sq = G_gravity * mass_prof / dists
+        vmax = np.max(vel_prof_sq)
+        # Eq 4 in P. Behroozi (2012) ROCKSTAR paper.
+        sigma_x = vmax**2 / (G_gravity * 200 * rhom * 4 * np.pi / 3)
+        sigma_v = np.var(rel_vel)
+    else:
+        # Get R_Delta
+        loc2 = np.argmax(mass_prof / (4 / 3 * np.pi * dists ** 3) <= delta * rhom)
+        sigma_x = dists[loc2]**2
+        sigma_v = np.median(velsq[:loc2])
 
-    # Get v_max
-    vel_prof_sq = G_gravity * mass_prof / dists
-    vmax = np.max(vel_prof_sq)
-
-    sigma_v = np.median(velsq[:loc2])
-
-    return r200, m200, sigma_x, sigma_v, vmax
+    return r200, m200, sigma_x, sigma_v
 
 
 def classify(
@@ -193,8 +196,7 @@ def classify_seeds_in_mini_box(
         # ======================================================================
         rel_pos = relative_coordinates(pos_seed_mb[i], pos_part, boxsize)
         rel_vel = vel_part - vel_seed_mb[i]
-        # r200, m200, vmax = compute_halo_properties(rel_pos, part_mass, rhom)
-        r200, m200, _, _, vmax = \
+        r200, m200, sigma_x, sigma_v = \
             compute_halo_properties(rel_pos, rel_vel, part_mass, rhom)
         
         # Classify
@@ -205,10 +207,8 @@ def classify_seeds_in_mini_box(
             continue
         
         # Compute phase space distance from particle to halo
-        sigmax = vmax**2 / (G_gravity * 200 * rhom * 4 * np.pi / 3)
-        sigmav = np.var(rel_vel)
-        dphsq = np.sum(np.square(rel_pos), axis=1) / sigmax + \
-            np.sum(np.square(rel_vel), axis=1) / sigmav
+        dphsq = np.sum(np.square(rel_pos), axis=1) / sigma_x + \
+            np.sum(np.square(rel_vel), axis=1) / sigma_v
 
         # Select orbiting particles' PID
         row_idx_order = np.argsort(row_part[mask_orb])
@@ -250,8 +250,8 @@ def classify_seeds_in_mini_box(
          # If there are orbiting seeds, append them to the members list.
         if mask_orb_seed.sum() > 0:
             # Compute phase space distance from particle to halo
-            dphsq = np.sum(np.square(rel_pos), axis=1) / sigmax + \
-                np.sum(np.square(rel_vel), axis=1) / sigmav
+            dphsq = np.sum(np.square(rel_pos), axis=1) / sigma_x + \
+                np.sum(np.square(rel_vel), axis=1) / sigma_v
 
             # Select orbiting particles' PID
             orb_pid_seed = hid_seed[mask_self][mask_orb_seed]
