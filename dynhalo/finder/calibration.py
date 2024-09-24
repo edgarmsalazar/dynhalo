@@ -287,6 +287,7 @@ def gradient_minima(
 
     return grad_r, grad_min
 
+
 @timer
 def calibrate_finder(
     n_seeds: int,
