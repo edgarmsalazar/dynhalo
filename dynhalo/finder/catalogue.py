@@ -679,7 +679,6 @@ def percolate_particles(
                 'PID': halo_memb_temp[hid]['PID'],
                 'row_idx': halo_memb_temp[hid]['row_idx'],
             }
-    print(removed_haloes)
 
     # ==========================================================================
     #                                   Step 2
@@ -726,6 +725,7 @@ def percolate_particles(
     #     pass
 
     return
+
 
 if __name__ == "__main__":
     pass
