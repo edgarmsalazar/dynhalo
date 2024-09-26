@@ -712,6 +712,7 @@ def percolate_particles(
 
     with h5.File(path + f'run_{dir_name}/halo_pids.hdf5', 'r') as hdf:
         ohids_pids = hdf['PID'][()]
+    mask_parents = ohids_pids == -1
     
     with h5.File(path + f'run_{dir_name}/catalogue_raw.hdf5', 'r') as hdf_raw, \
         h5.File(path + f'run_{dir_name}/catalogue.hdf5', 'w') as hdf:
@@ -720,8 +721,16 @@ def percolate_particles(
         hdf.create_dataset('Morb_perc', data=morb_new[mask_morb])
         hdf.create_dataset('PID', data=ohids_pids[mask_morb])
     
-    # # Create members catalogue for parent haloes only.
-    # with h5.File(path + f'run_{dir_name}/members.hdf5', 'r') as hdf:
+    # Create members catalogue for parent haloes only.
+    with h5.File(path + f'run_{dir_name}/members.hdf5', 'w') as hdf:
+        # Only save members of parent haloes.
+        for hid in tqdm(ohids[mask_morb & mask_parents], ncols=100, colour='green',
+                        desc='Saving members'):
+            hdf.create_dataset(f'{hid}/PID', data=halo_memb[hid]['PID'])
+            hdf.create_dataset(f'{hid}/row_idx', data=halo_memb[hid]['row_idx'])
+
+    # Non members catalogue
+    # with h5.File(path + f'run_{dir_name}/non_members.hdf5', 'w') as hdf:
     #     pass
 
     return
