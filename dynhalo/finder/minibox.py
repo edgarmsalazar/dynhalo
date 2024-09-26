@@ -232,7 +232,7 @@ def split_box_into_mini_boxes(
     None
     """
     # Create directory if it does not exist
-    save_path = path + 'mini_boxes_new/'
+    save_path = path + 'mini_boxes/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
