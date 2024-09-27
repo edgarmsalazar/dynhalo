@@ -17,7 +17,34 @@ from dynhalo.utils import G_gravity, timer
 filterwarnings('ignore')
 
 
-def compute_halo_properties(rel_pos, rel_vel, part_mass, rhom, delta: Any = 'rockstar'):
+def compute_halo_properties(
+    rel_pos: np.ndarray,
+    rel_vel: np.ndarray,
+    part_mass: float,
+    rhom: float,
+    delta: Any = 'rockstar',
+) -> Tuple[float]:
+    """Compute halo radius, mass and dispersion parameter
+
+    Parameters
+    ----------
+    rel_pos : np.ndarray
+        Relative position of paticles to halo
+    rel_vel : np.ndarray
+        Relative velocity of paticles to halo
+    part_mass : float
+        Particle mass
+    rhom : float
+        Mass density of the universe
+    delta : Any, optional
+        Delta parameter for the distance metric. If 'rockstar' is selected then
+        the distance metric from Behroozi (2012) is used. By default 'rockstar'
+
+    Returns
+    -------
+    Tuple[float]
+        Returns R200, M200 and tau_delta squared
+    """
     dists = np.sqrt(np.sum(np.square(rel_pos), axis=1))
     argsort = np.argsort(dists)
 
@@ -35,15 +62,46 @@ def compute_halo_properties(rel_pos, rel_vel, part_mass, rhom, delta: Any = 'roc
         vel_prof_sq = G_gravity * mass_prof / dists
         vmax = np.max(vel_prof_sq)
         # Eq 4 in P. Behroozi (2012) ROCKSTAR paper.
-        sigma_x = vmax**2 / (G_gravity * 200 * rhom * 4 * np.pi / 3)
-        sigma_v = np.var(rel_vel)
+        sigma_x_sq = vmax**2 / (G_gravity * 200 * rhom * 4 * np.pi / 3)
+        sigma_v_sq = np.var(rel_vel)
     else:
         # Get R_Delta
         loc2 = np.argmax(mass_prof / (4 / 3 * np.pi * dists ** 3) <= delta * rhom)
-        sigma_x = dists[loc2]**2
-        sigma_v = np.median(velsq[:loc2])
+        sigma_x_sq = dists[loc2]**2
+        sigma_v_sq = np.median(velsq[:loc2])
+    
+    tau_delta_sq = sigma_x_sq / sigma_v_sq
 
-    return r200, m200, sigma_x, sigma_v
+    return r200, m200, tau_delta_sq
+
+
+def distance_metric(
+    rel_pos: np.ndarray,
+    rel_vel: np.ndarray,
+    tau_delta_sq: float,
+    lamb:float = 1.0,
+) -> float:
+    """Computes the distance between particles and halo centre in
+    six-dimensional phase space.
+
+    Parameters
+    ----------
+    rel_pos : np.ndarray
+        Relative position of paticles to halo
+    rel_vel : np.ndarray
+        Relative velocity of paticles to halo
+    tau_delta_sq : float
+        Dispersion parameter in distance metric
+    lamb : float, optional
+        Scaling parameter in distance metric, by default 1.0
+
+    Returns
+    -------
+    float
+        Six-dimensional distance
+    """
+    return np.sum(np.square(rel_pos), axis=1) + \
+            lamb * tau_delta_sq * np.sum(np.square(rel_vel), axis=1)
 
 
 def classify(
@@ -107,6 +165,8 @@ def classify_seeds_in_mini_box(
     minisize: float,
     path: str,
     dir_name: str,
+    delta: Any = 'rockstar',
+    lamb: float = 1.0,
     padding: float = 5.0,
 ) -> None:
     """Runs the classifier for each seed in a mini box.
@@ -143,6 +203,11 @@ def classify_seeds_in_mini_box(
         Size of mini box
     path : str
         Location from where to load the file
+    delta : Any, optional
+        Delta parameter for the distance metric. If 'rockstar' is selected then
+        the distance metric from Behroozi (2012) is used. By default 'rockstar'
+    lamb : float, optional
+        Scaling parameter in distance metric, by default 1.0
     padding : float
         Only particles up to this distance from the mini box edge are considered 
         for classification. Defaults to 5
@@ -196,8 +261,8 @@ def classify_seeds_in_mini_box(
         # ======================================================================
         rel_pos = relative_coordinates(pos_seed_mb[i], pos_part, boxsize)
         rel_vel = vel_part - vel_seed_mb[i]
-        r200, m200, sigma_x, sigma_v = \
-            compute_halo_properties(rel_pos, rel_vel, part_mass, rhom)
+        r200, m200, tau_delta_sq = \
+            compute_halo_properties(rel_pos, rel_vel, part_mass, rhom, delta)
         
         # Classify
         mask_orb = classify(rel_pos, rel_vel, r200, m200, pars)
@@ -207,8 +272,7 @@ def classify_seeds_in_mini_box(
             continue
         
         # Compute phase space distance from particle to halo
-        dphsq = np.sum(np.square(rel_pos), axis=1) / sigma_x + \
-            np.sum(np.square(rel_vel), axis=1) / sigma_v
+        dphsq = distance_metric(rel_pos, rel_vel, tau_delta_sq, lamb)
 
         # Select orbiting particles' PID
         row_idx_order = np.argsort(row_part[mask_orb])
@@ -251,8 +315,7 @@ def classify_seeds_in_mini_box(
          # If there are orbiting seeds, append them to the members list.
         if mask_orb_seed.sum() > 0:
             # Compute phase space distance from particle to halo
-            dphsq = np.sum(np.square(rel_pos), axis=1) / sigma_x + \
-                np.sum(np.square(rel_vel), axis=1) / sigma_v
+            dphsq = distance_metric(rel_pos, rel_vel, tau_delta_sq, lamb)
 
             # Select orbiting particles' PID
             orb_pid_seed = hid_seed[mask_self][mask_orb_seed]
@@ -311,6 +374,8 @@ def generate_full_box_catalogue(
     boxsize: float,
     minisize: float,
     dir_name: str,
+    delta: Any = 'rockstar',
+    lamb: float = 1.0,
     padding: float = 5.0,
     n_threads: int = None,
 ) -> None:
@@ -331,6 +396,11 @@ def generate_full_box_catalogue(
         Size of simulation box
     minisize : float
         Size of mini box
+    delta : Any, optional
+        Delta parameter for the distance metric. If 'rockstar' is selected then
+        the distance metric from Behroozi (2012) is used. By default 'rockstar'
+    lamb : float, optional
+        Scaling parameter in distance metric, by default 1.0
     padding : float, optional
         Only particles up to this distance from the mini box edge are considered 
         for classification. Defaults to 5
@@ -350,7 +420,8 @@ def generate_full_box_catalogue(
 
     func = partial(classify_seeds_in_mini_box, min_num_part=min_num_part,
                    part_mass=part_mass, rhom=rhom, boxsize=boxsize, path=path,
-                   minisize=minisize, padding=padding, dir_name=dir_name)
+                   minisize=minisize, padding=padding, dir_name=dir_name,
+                   delta=delta, lamb=lamb)
 
     with Pool(n_threads) as pool:
         list(tqdm(pool.imap(func, range(n_mini_boxes)),
