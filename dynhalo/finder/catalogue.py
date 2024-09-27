@@ -203,6 +203,8 @@ def classify_seeds_in_mini_box(
         Size of mini box
     path : str
         Location from where to load the file
+    dir_name : str
+        Label for the current run. The directory created will be `run_dir_name`.
     delta : Any, optional
         Delta parameter for the distance metric. If 'rockstar' is selected then
         the distance metric from Behroozi (2012) is used. By default 'rockstar'
@@ -396,6 +398,8 @@ def generate_full_box_catalogue(
         Size of simulation box
     minisize : float
         Size of mini box
+    dir_name : str
+        Label for the current run. The directory created will be `run_dir_name`.
     delta : Any, optional
         Delta parameter for the distance metric. If 'rockstar' is selected then
         the distance metric from Behroozi (2012) is used. By default 'rockstar'
@@ -497,7 +501,11 @@ def percolate_haloes(
     path : str
         Location from where to load the file
     dir_name : str
-        _description_
+        Label for the current run. The directory created will be `run_dir_name`.
+
+    Returns
+    -------
+    None
     """
     # Load parent candidates
     with h5.File(path + f'run_{dir_name}/catalogue_raw.hdf5', 'r') as hdf:
@@ -653,7 +661,24 @@ def percolate_particles(
     min_num_part: int,
     part_mass: float,
     dir_name: str,
-):
+) -> None:
+    """_summary_
+
+    Parameters
+    ----------
+    path : str
+        Location from where to load the file
+    min_num_part : int
+        Minimum number of particles needed to be considered a halo
+    part_mass : float
+        Mass per particle
+    dir_name : str
+        Label for the current run. The directory created will be `run_dir_name`.
+
+    Returns
+    -------
+    None
+    """
     # Load parent haloes
     with h5.File(path + f'run_{dir_name}/halo_pids.hdf5', 'r') as hdf:
         ohids_pids = hdf['PID'][()]
