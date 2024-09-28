@@ -2,7 +2,7 @@ import os
 from collections import defaultdict
 from functools import partial
 from multiprocessing import Pool
-from typing import List, Tuple, Union, Any
+from typing import Any, List, Tuple, Union
 from warnings import filterwarnings
 
 import h5py as h5
@@ -163,7 +163,7 @@ def classify_seeds_in_mini_box(
     rhom: float,
     boxsize: float,
     minisize: float,
-    path: str,
+    load_path: str,
     dir_name: str,
     delta: Any = 'rockstar',
     lamb: float = 1.0,
@@ -218,13 +218,13 @@ def classify_seeds_in_mini_box(
     -------
     None
     """
-    save_path = path + f'run_{dir_name}/mini_box_catalogues/'
+    save_path = load_path + f'run_{dir_name}/mini_box_catalogues/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
     # Load seeds in mini box
     pos_seed_mb, vel_seed_mb, hid_seed_mb, _ = \
-        load_seeds(mini_box_id, boxsize, minisize, path, padding)
+        load_seeds(mini_box_id, boxsize, minisize, load_path, padding)
     n_seeds = len(hid_seed_mb)
 
     # Exit if there are no seeds in the mini box.
@@ -234,7 +234,7 @@ def classify_seeds_in_mini_box(
     # Load adjacent seeds
     pos_seed_adj, vel_seed_adj, hid_seed_adj, _ = \
         load_seeds(mini_box_id, boxsize, minisize,
-                   path, padding, adjacent=True)
+                   load_path, padding, adjacent=True)
     
     # Concatenate all seeds for ease of selection.
     hid_seed = np.hstack([hid_seed_mb, hid_seed_adj])
@@ -243,10 +243,10 @@ def classify_seeds_in_mini_box(
 
     # Load particles
     pos_part, vel_part, pid_part, row_part = \
-        load_particles(mini_box_id, boxsize, minisize, path, padding)
+        load_particles(mini_box_id, boxsize, minisize, load_path, padding)
     
     # Load calibration parameters
-    with h5.File(path + 'calibration_pars.hdf5', 'r') as hdf:
+    with h5.File(load_path + 'calibration_pars.hdf5', 'r') as hdf:
         pars = (*hdf['pos'][()], *hdf['neg'][()])
 
     # Create empty catalog of found halos and a dictionary with the PIDs.
