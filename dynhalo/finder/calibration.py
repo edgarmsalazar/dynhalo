@@ -20,7 +20,7 @@ def _select_particles_around_haloes(
     boxsize: float,
     minisize: float,
     file_seeds: str,
-    path: str,
+    save_path: str,
     part_mass: float,
     rhom: float,
 ) -> Tuple[np.ndarray]:
@@ -39,7 +39,7 @@ def _select_particles_around_haloes(
         Size of mini box
     file_seeds : str
         File containing the seeds, including path.
-    path : str
+    save_path : str
         Path to the mini boxes
     part_mass : float
         Mass per particle
@@ -95,7 +95,7 @@ def _select_particles_around_haloes(
     # NOTE: Could parallelise this but it is not super slow
     for mini_box_id in tqdm(unique_mini_box_ids, desc='Processing mini box',
                         colour='blue', ncols=100):
-        pos, vel, _, _ = load_particles(mini_box_id, boxsize, minisize, path)
+        pos, vel, _, _ = load_particles(mini_box_id, boxsize, minisize, save_path)
 
         # Iterate over seeds in current mini box ID
         mask_seeds_in_mini_box = seed_mini_box_id == mini_box_id
@@ -143,7 +143,7 @@ def get_calibration_data(
     boxsize: float,
     minisize: float,
     file_seeds: str,
-    path: str,
+    save_path: str,
     part_mass: float,
     rhom: float,
 ) -> Tuple[np.ndarray]:
@@ -161,7 +161,7 @@ def get_calibration_data(
         Size of mini box
     file_seeds : str
         File containing the seeds, including path.
-    path : str
+    save_path : str
         Path to the mini boxes
     part_mass : float
         Mass per particle
@@ -173,7 +173,7 @@ def get_calibration_data(
     Tuple[np.ndarray]
         Radial distance, radial velocity, and log of the square of the velocity
     """
-    file_name = path + 'calibration_data.hdf5'
+    file_name = save_path + 'calibration_data.hdf5'
     try:
         with h5.File(file_name, 'r') as hdf:
             r = hdf['r'][()]
@@ -187,7 +187,7 @@ def get_calibration_data(
             boxsize,
             minisize,
             file_seeds,
-            path,
+            save_path,
             part_mass,
             rhom,
         )
@@ -236,7 +236,6 @@ def cost_perp_distance(b: float, *data) -> float:
     Returns
     -------
     float
-        _description_
     """
     r, lnv2, slope, width = data
     d = np.abs(lnv2 - slope * r - b) / np.sqrt(1 + slope**2)
@@ -295,7 +294,7 @@ def calibrate_finder(
     boxsize: float,
     minisize: float,
     file_seeds: str,
-    path: str,
+    save_path: str,
     part_mass: float,
     rhom: float,
     n_points: int = 20,
@@ -317,7 +316,7 @@ def calibrate_finder(
         Size of mini box
     file_seeds : str
         File containing the seeds, including path.
-    path : str
+    save_path : str
         Path to the mini boxes
     part_mass : float
         Mass per particle
@@ -338,7 +337,7 @@ def calibrate_finder(
         boxsize=boxsize,
         minisize=minisize,
         file_seeds=file_seeds,
-        path=path,
+        save_path=save_path,
         part_mass=part_mass,
         rhom=rhom
     )
@@ -381,7 +380,7 @@ def calibrate_finder(
     )
     b_neg = res.x[0]
 
-    with h5.File(path + 'calibration_pars.hdf5', 'w') as hdf:
+    with h5.File(save_path + 'calibration_pars.hdf5', 'w') as hdf:
         hdf.create_dataset('pos', data=[m_pos, b_pos])
         hdf.create_dataset('neg', data=[m_neg, b_neg])
 

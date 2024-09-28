@@ -137,7 +137,7 @@ def get_adjacent_mini_box_ids(
     x0 = positions[mini_box_ids == mini_box_id]
     d = relative_coordinates(x0, positions, boxsize)
     d = np.sqrt(np.sum(np.square(d), axis=1))
-    mask = d <= 1.01*np.sqrt(3)*minisize
+    mask = d <= 1.01 * np.sqrt(3.) * minisize
     return mini_box_ids[mask]
 
 
@@ -146,7 +146,7 @@ def generate_mini_box_ids(
     positions: np.ndarray,
     boxsize: float,
     minisize: float,
-    path: str,
+    save_path: str,
     chunksize: int = 100_000,
     name: str = None
 ) -> None:
@@ -160,7 +160,7 @@ def generate_mini_box_ids(
         Size of simulation box
     minisize : float
         Size of mini box
-    path : str
+    save_path : str
         Where to save the IDs
     chunksize : int, optional
         Number of items to process at a time in chunks, by default 100_000
@@ -191,10 +191,10 @@ def generate_mini_box_ids(
         ids[low:upp] = get_mini_box_id(positions[low:upp], boxsize, minisize)
 
     if name:
-        file_name = f'mini_box_id_{name}.hdf5'
+        file_name = f'mini_box_id_nside_{boxes_per_side}_{name}.hdf5'
     else:
-        file_name = f'mini_box_id.hdf5'
-    with h5.File(path + file_name, 'w') as hdf:
+        file_name = f'mini_box_id_nside_{boxes_per_side}.hdf5'
+    with h5.File(save_path + file_name, 'w') as hdf:
         hdf.create_dataset('MBID', data=ids, dtype=uint_dtype)
 
     return None
@@ -205,7 +205,9 @@ def split_box_into_mini_boxes(
     positions: np.ndarray,
     velocities: np.ndarray,
     pid: np.ndarray,
-    path: str,
+    save_path: str,
+    boxsize: float, 
+    minisize: float,
     chunksize: int = 100_000,
     name: str = None,
 ) -> None:
@@ -219,8 +221,12 @@ def split_box_into_mini_boxes(
         Cartesian velocities
     pid : np.ndarray
         Unique IDs for each position (e.g. PID, HID)
-    path : str
+    save_path : str
         Where to save the IDs
+    boxsize : float
+        Size of simulation box
+    minisize : float
+        Size of mini box
     chunksize : int, optional
         Number of items to process at a time in chunks, by default 100_000
     name : str, optional
@@ -231,19 +237,39 @@ def split_box_into_mini_boxes(
     -------
     None
     """
-    # Create directory if it does not exist
-    save_path = path + 'mini_boxes/'
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
+    # Determine number of partitions per side
+    boxes_per_side = np.int_(np.ceil(boxsize / minisize))
 
+    # Load mini box ids
     if name:
-        mini_box_ids_file = path + f'mini_box_id_{name}.hdf5'
+        mini_box_ids_file = save_path + \
+            f'mini_box_id_nside_{boxes_per_side}_{name}.hdf5'
     else:
-        mini_box_ids_file = path + f'mini_box_id.hdf5'
-    
-    with h5.File(mini_box_ids_file, 'r') as hdf:
-        mini_box_ids = hdf['MBID'][()]
+        mini_box_ids_file = save_path + \
+            f'mini_box_id_nside_{boxes_per_side}.hdf5'
+    # Load if file already exists
+    try:
+        with h5.File(mini_box_ids_file, 'r') as hdf:
+            mini_box_ids = hdf['MBID'][()]
+    # Create and file otherwise
+    except:
+        generate_mini_box_ids(
+            positions=positions, 
+            boxsize=boxsize, 
+            minisize=minisize,
+            path=save_path,
+            chunksize=1_000_000,
+            name=name,
+            )
+        with h5.File(mini_box_ids_file, 'r') as hdf:
+            mini_box_ids = hdf['MBID'][()]
 
+    # Create target directory
+    save_dir = save_path + f'mini_boxes_nside_{boxes_per_side}/'
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    # Sort items by mini box id
     mb_order = np.argsort(mini_box_ids)
 
     # Get smallest data type to represent IDs
@@ -315,7 +341,7 @@ def split_box_into_mini_boxes(
                 vel_chunk[indexed_slice[i] : indexed_slice[i+1]],
                 row_chunk[indexed_slice[i] : indexed_slice[i+1]],
             )
-            with h5.File(save_path + f'{mb_id}.hdf5', 'a') as hdf:
+            with h5.File(save_dir + f'{mb_id}.hdf5', 'a') as hdf:
                 if not name in hdf.keys():
                     hdf.create_group(name)
 
@@ -328,10 +354,11 @@ def split_box_into_mini_boxes(
 
 def _load_mini_box(
     mini_box_id: int,
-    path: str,
+    load_path: str,
+    boxes_per_side: int,
     name: str = None,
 ) -> Tuple[np.ndarray]:
-    """Load mini box
+    """Load seed or particle data in mini box
 
     Parameters
     ----------
@@ -339,20 +366,27 @@ def _load_mini_box(
         Sub-box ID
     path : str
         Location from where to load the file
+    boxes_per_side : int
+        Number of partitions per side of the simulation box
     name : str, optional
-        Identifier within the file, by default None
+        Identifier within the file: seed or particle. If `None`, the method 
+        returns None for each array. By default None
 
     Returns
     -------
     Tuple[np.ndarray]
-        Position, velocity, ID and row index
+        Position, velocity, ID and row index.
+
+    None if mini box file does not exist or `name` was set to None.
+
     """
     if name:
         prefix = f'{name}/'
     else:
         prefix = None
     try:
-        with h5.File(path + f'mini_boxes/{mini_box_id}.hdf5', 'r') as hdf:
+        file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box_id}.hdf5'
+        with h5.File(load_path + file_name, 'r') as hdf:
             pos = hdf[prefix + 'pos'][()]
             vel = hdf[prefix + 'vel'][()]
             pid = hdf[prefix + 'ID'][()]
@@ -366,16 +400,17 @@ def load_particles(
     mini_box_id: int,
     boxsize: float,
     minisize: float,
-    path: str,
+    load_path: str,
     padding: float = 5.0,
 ) -> Tuple[np.ndarray]:
-    """Load particles from a mini box
+    """Load particles from a mini box including all particles in adjacent boxes 
+    up to the `padding` distance.
 
     Parameters
     ----------
     mini_box_id : int
         Sub-box ID
-    path : str
+    load_path : str
         Location from where to load the file
     boxsize : float
         Size of simulation box
@@ -383,15 +418,19 @@ def load_particles(
         Size of mini box
     padding : float
         Only particles up to this distance from the mini box edge are considered 
-        for classification. Defaults to 5
+        for classification. Defaults to 5.
 
     Returns
     -------
     Tuple[np.ndarray]
         Position, velocity, ID and row index
     """
+    # Determine number of partitions per side
+    boxes_per_side = np.int_(np.ceil(boxsize / minisize))
+
     # Generate the IDs and positions of the mini box grid
     grid_ids, grid_pos = generate_mini_box_grid(boxsize, minisize)
+
     # Get the adjacent mini box IDs
     adj_mini_box_ids = get_adjacent_mini_box_ids(
         mini_box_id=mini_box_id,
@@ -408,7 +447,7 @@ def load_particles(
     # Load all adjacent boxes
     for i, mini_box in enumerate(adj_mini_box_ids):
         pos[i], vel[i], pid[i], row[i] = _load_mini_box(
-            mini_box, path, name='part')
+            mini_box, load_path, boxes_per_side, name='part')
     # Concatenate into a single array
     pos = np.concatenate(pos)
     vel = np.concatenate(vel)
@@ -461,6 +500,9 @@ def load_seeds(
     Tuple[np.ndarray]
         Position, velocity, ID and row index
     """
+    # Determine number of partitions per side
+    boxes_per_side = np.int_(np.ceil(boxsize / minisize))
+
     if adjacent:
         # Generate the IDs and positions of the mini box grid
         grid_ids, grid_pos = generate_mini_box_grid(boxsize, minisize)
@@ -472,8 +514,8 @@ def load_seeds(
             boxsize=boxsize,
             minisize=minisize
         )
+
         # Create empty lists (containers) to save the data from file for each ID
-        # pos, vel, pid, row = ([[] for _ in range(len(adj_mini_box_ids)-1)]
         pos, vel, pid, row = ([] for _ in range(4))
 
         # Load all adjacent boxes
@@ -482,7 +524,7 @@ def load_seeds(
                 continue
             else:
                 postemp, veltemp, pidtemp, rowtemp = _load_mini_box(
-                    mini_box, path, name='seed')
+                    mini_box, path, boxes_per_side, name='seed')
                 # If no seeds where found
                 if any([p is None for p in (postemp, veltemp, pidtemp, rowtemp)]):
                     continue
@@ -512,7 +554,7 @@ def load_seeds(
         return pos[mask], vel[mask], pid[mask], row[mask]
 
     else:
-        return _load_mini_box(mini_box_id, path=path, name='seed')
+        return _load_mini_box(mini_box_id, path, boxes_per_side,name='seed')
 
 
 if __name__ == '__main__':
