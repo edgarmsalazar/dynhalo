@@ -473,7 +473,7 @@ def load_seeds(
     mini_box_id: int,
     boxsize: float,
     minisize: float,
-    path: str,
+    load_path: str,
     padding: float = 5.0,
     adjacent: bool = False,
 ) -> Tuple[np.ndarray]:
@@ -487,7 +487,7 @@ def load_seeds(
         Size of simulation box
     minisize : float
         Size of mini box
-    path : str
+    load_path : str
         Location from where to load the file
     padding : float
         Only particles up to this distance from the mini box edge are considered 
@@ -524,7 +524,7 @@ def load_seeds(
                 continue
             else:
                 postemp, veltemp, pidtemp, rowtemp = _load_mini_box(
-                    mini_box, path, boxes_per_side, name='seed')
+                    mini_box, load_path, boxes_per_side, name='seed')
                 # If no seeds where found
                 if any([p is None for p in (postemp, veltemp, pidtemp, rowtemp)]):
                     continue
@@ -554,7 +554,7 @@ def load_seeds(
         return pos[mask], vel[mask], pid[mask], row[mask]
 
     else:
-        return _load_mini_box(mini_box_id, path, boxes_per_side,name='seed')
+        return _load_mini_box(mini_box_id, load_path, boxes_per_side,name='seed')
 
 
 if __name__ == '__main__':
