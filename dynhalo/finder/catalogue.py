@@ -201,7 +201,7 @@ def classify_seeds_in_mini_box(
         Size of simulation box
     minisize : float
         Size of mini box
-    path : str
+    load_path : str
         Location from where to load the file
     dir_name : str
         Label for the current run. The directory created will be `run_dir_name`.
@@ -368,17 +368,17 @@ def classify_seeds_in_mini_box(
 
 
 @timer
-def generate_full_box_catalogue(
-    path: str,
+def classify_all_mini_boxes(
+    load_path: str,
     min_num_part: int,
     part_mass: float,
     rhom: float,
     boxsize: float,
     minisize: float,
     dir_name: str,
-    delta: Any = 'rockstar',
-    lamb: float = 1.0,
-    padding: float = 5.0,
+    delta: Any,
+    lamb: float,
+    padding: float,
     n_threads: int = None,
 ) -> None:
     """Generates a halo catalogue using the kinetic mass criterion to classify
@@ -386,7 +386,7 @@ def generate_full_box_catalogue(
 
     Parameters
     ----------
-    path : str
+    load_path : str
         Location from where to load the file
     min_num_part : int
         Minimum number of particles needed to be considered a halo
@@ -416,16 +416,16 @@ def generate_full_box_catalogue(
     None
     """
     # Create directory if it does not exist
-    save_path = path + f'run_{dir_name}/mini_box_catalogues/'
+    save_path = load_path + f'run_{dir_name}/mini_box_catalogues/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
     n_mini_boxes = np.int_(np.ceil(boxsize / minisize))**3
 
     func = partial(classify_seeds_in_mini_box, min_num_part=min_num_part,
-                   part_mass=part_mass, rhom=rhom, boxsize=boxsize, path=path,
-                   minisize=minisize, padding=padding, dir_name=dir_name,
-                   delta=delta, lamb=lamb)
+                   part_mass=part_mass, rhom=rhom, boxsize=boxsize, 
+                   load_path=load_path, minisize=minisize, padding=padding, 
+                   dir_name=dir_name, delta=delta, lamb=lamb)
 
     with Pool(n_threads) as pool:
         list(tqdm(pool.imap(func, range(n_mini_boxes)),
@@ -445,7 +445,7 @@ def generate_full_box_catalogue(
                 pos.append(hdf['halo/pos'][()])
                 vel.append(hdf['halo/vel'][()])
 
-    with h5.File(path + f'run_{dir_name}/catalogue_raw.hdf5', 'w') as hdf:
+    with h5.File(load_path + f'run_{dir_name}/temp_catalogue.hdf5', 'w') as hdf:
         hdf.create_dataset('M200m', data=np.concatenate(m200m))
         hdf.create_dataset('R200m', data=np.concatenate(r200m))
         hdf.create_dataset('OHID', data=np.concatenate(ohid))
@@ -455,7 +455,7 @@ def generate_full_box_catalogue(
 
     # Consolidate members catalogue
     # Process haloes
-    with h5.File(path + f'run_{dir_name}/members_halo_temp.hdf5', 'w') as hdf:
+    with h5.File(load_path + f'run_{dir_name}/temp_members_halo.hdf5', 'w') as hdf:
         for f in tqdm(files, ncols=100, desc='Merging members', colour='green'):
             with h5.File(save_path + f, 'r') as hdf_load:
                 if 'members' in hdf_load.keys():
@@ -469,7 +469,7 @@ def generate_full_box_catalogue(
                                 data=hdf_load[f'members/halo/{hid}/dph'][()])
                         
     # Process particles
-    with h5.File(path + f'run_{dir_name}/members_part_temp.hdf5', 'w') as hdf:
+    with h5.File(load_path + f'run_{dir_name}/temp_members_part.hdf5', 'w') as hdf:
         for f in tqdm(files, ncols=100, desc='Merging members', colour='green'):
             with h5.File(save_path + f, 'r') as hdf_load:
                 if 'members' in hdf_load.keys():
@@ -486,12 +486,13 @@ def generate_full_box_catalogue(
                         hdf.create_dataset(
                             f'{hid}/row_idx_inf',
                             data=hdf_load[f'non_members/part/{hid}/row_idx'][()])
-    return
+    
+    return None
 
 
 @timer
 def percolate_haloes(
-    path: str,
+    save_path: str,
     dir_name: str,
 ) -> None:
     """Percolate parent halo candidates.
@@ -508,7 +509,7 @@ def percolate_haloes(
     None
     """
     # Load parent candidates
-    with h5.File(path + f'run_{dir_name}/catalogue_raw.hdf5', 'r') as hdf:
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
         ohids = hdf['OHID'][()]
         # Rank order haloes by mass
         morb_order = np.argsort(hdf['Morb'][()])[::-1]
@@ -516,7 +517,7 @@ def percolate_haloes(
 
     # Load members
     halo_memb = {}
-    with h5.File(path + f'run_{dir_name}/members_halo_temp.hdf5', 'r') as hdf:
+    with h5.File(save_path + f'run_{dir_name}/temp_members_halo.hdf5', 'r') as hdf:
         for key in tqdm(hdf.keys(), ncols=100, colour='blue',
                         desc='Loading members'):
             halo_memb[int(key)] = {
@@ -638,7 +639,7 @@ def percolate_haloes(
     #                               Parent halo IDs
     # ==========================================================================
     # Load parent candidates
-    with h5.File(path + f'run_{dir_name}/catalogue_raw.hdf5', 'r') as hdf:
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
         ohids = hdf['OHID'][()]
     pids = np.full(ohids.shape[0], fill_value=-1, dtype=np.int32)
     
@@ -649,15 +650,15 @@ def percolate_haloes(
         pids[mask] = hid
 
     # Save results
-    with h5.File(path + f'run_{dir_name}/halo_pids.hdf5', 'w') as hdf:
+    with h5.File(save_path + f'run_{dir_name}/temp_pids.hdf5', 'w') as hdf:
         hdf.create_dataset('PID', data=pids)
     
-    return
+    return None
 
 
 @timer
 def percolate_particles(
-    path: str,
+    save_path: str,
     min_num_part: int,
     part_mass: float,
     dir_name: str,
@@ -680,17 +681,17 @@ def percolate_particles(
     None
     """
     # Load parent haloes
-    with h5.File(path + f'run_{dir_name}/halo_pids.hdf5', 'r') as hdf:
+    with h5.File(save_path + f'run_{dir_name}/temp_pids.hdf5', 'r') as hdf:
         ohids_pids = hdf['PID'][()]
     mask_parents = ohids_pids == -1
 
-    with h5.File(path + f'run_{dir_name}/catalogue_raw.hdf5', 'r') as hdf:
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
         ohids = hdf['OHID'][()]
     ohids = ohids[mask_parents]
 
     # Load members
     halo_memb_temp = {}
-    with h5.File(path + f'run_{dir_name}/members_part_temp.hdf5', 'r') as hdf:
+    with h5.File(save_path + f'run_{dir_name}/temp_members_part.hdf5', 'r') as hdf:
         file_keys = list(hdf.keys())
         for key in tqdm(file_keys, ncols=100, colour='blue',
                         desc='Loading members'):
@@ -786,7 +787,7 @@ def percolate_particles(
     # and needs to be recomputed.
     # ==========================================================================
     # Load raw data to keep same ordering
-    with h5.File(path + f'run_{dir_name}/catalogue_raw.hdf5', 'r') as hdf:
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
         ohids = hdf['OHID'][()]
         morb_new = hdf['Morb'][()]
     
@@ -806,19 +807,19 @@ def percolate_particles(
     # Morb > 0)
     mask_morb = (morb_new > 0) & np.isin(ohids, removed_haloes, invert=True)
 
-    with h5.File(path + f'run_{dir_name}/halo_pids.hdf5', 'r') as hdf:
+    with h5.File(save_path + f'run_{dir_name}/temp_pids.hdf5', 'r') as hdf:
         ohids_pids = hdf['PID'][()]
     mask_parents = ohids_pids == -1
     
-    with h5.File(path + f'run_{dir_name}/catalogue_raw.hdf5', 'r') as hdf_raw, \
-        h5.File(path + f'run_{dir_name}/catalogue.hdf5', 'w') as hdf:
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf_raw, \
+        h5.File(save_path + f'run_{dir_name}/catalogue.hdf5', 'w') as hdf:
         for key in hdf_raw.keys():
             hdf.create_dataset(key, data=hdf_raw[key][mask_morb])
         hdf.create_dataset('Morb_perc', data=morb_new[mask_morb])
         hdf.create_dataset('PID', data=ohids_pids[mask_morb])
     
     # Create members catalogue for parent haloes only.
-    with h5.File(path + f'run_{dir_name}/members.hdf5', 'w') as hdf:
+    with h5.File(save_path + f'run_{dir_name}/members.hdf5', 'w') as hdf:
         # Only save members of parent haloes.
         for hid in tqdm(ohids[mask_morb & mask_parents], ncols=100, colour='green',
                         desc='Saving members'):
@@ -829,7 +830,51 @@ def percolate_particles(
     # with h5.File(path + f'run_{dir_name}/non_members.hdf5', 'w') as hdf:
     #     pass
 
-    return
+    return None
+
+
+@timer
+def generate_catalogue(
+    load_path: str,
+    min_num_part: int,
+    part_mass: float,
+    rhom: float,
+    boxsize: float,
+    minisize: float,
+    dir_name: str,
+    delta: Any = 'rockstar',
+    lamb: float = 1.0,
+    padding: float = 5.0,
+    n_threads: int = None,
+):
+
+    classify_all_mini_boxes(
+        load_path=load_path,
+        min_num_part=min_num_part,
+        part_mass=part_mass,
+        rhom=rhom,
+        boxsize=boxsize,
+        minisize=minisize,
+        dir_name=dir_name,
+        delta=delta,
+        lamb=lamb,
+        padding=padding,
+        n_threads=n_threads,
+    )
+
+    percolate_haloes(
+        save_path=load_path,
+        dir_name=dir_name,
+    )
+    
+    percolate_particles(
+        save_path=load_path,
+        min_num_part=min_num_part,
+        part_mass=part_mass,
+        dir_name=dir_name,
+    )
+
+    return None
 
 
 if __name__ == "__main__":
