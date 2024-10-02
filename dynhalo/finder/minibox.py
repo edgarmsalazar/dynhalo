@@ -236,6 +236,12 @@ def split_box_into_mini_boxes(
     Returns
     -------
     None
+
+    Raises
+    ------
+    RuntimeError
+        If `chunksize` is too small, the chunk-finding loop cannot properly 
+        resolve all the mini box ids within a chunk.
     """
     # Determine number of partitions per side
     boxes_per_side = np.int_(np.ceil(boxsize / minisize))
@@ -258,7 +264,7 @@ def split_box_into_mini_boxes(
             boxsize=boxsize, 
             minisize=minisize,
             path=save_path,
-            chunksize=1_000_000,
+            chunksize=chunksize,
             name=name,
             )
         with h5.File(mini_box_ids_file, 'r') as hdf:
@@ -293,7 +299,12 @@ def split_box_into_mini_boxes(
 
     chunk_idx = [0,]
     i, upp = 0, 0
+    i_max = int(1.1*(mini_box_ids.shape[0]//chunksize))
     while True:
+        if i > i_max:
+            print(chunk_idx, i, upp)
+            raise RuntimeError(f'Maximum iterations reached i_max = {i_max}' + \
+                               'Chunk size too small. Please increase it.')
         low = chunk_idx[-1]
         upp = low + chunksize
         if upp < n_items:
