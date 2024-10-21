@@ -70,16 +70,17 @@ def compute_halo_properties(
         sigma_x_sq = dists[loc2]**2
         sigma_v_sq = np.median(velsq[:loc2])
     
-    tau_delta_sq = sigma_x_sq / sigma_v_sq
+    # tau_delta_sq = sigma_x_sq / sigma_v_sq
 
-    return r200, m200, tau_delta_sq
+    return r200, m200, sigma_x_sq, sigma_v_sq
 
 
 def distance_metric(
     rel_pos: np.ndarray,
     rel_vel: np.ndarray,
-    tau_delta_sq: float,
-    lamb:float = 1.0,
+    sigma_x_sq: float,
+    sigma_v_sq: float,
+    lamb: float = 1.0,
 ) -> float:
     """Computes the distance between particles and halo centre in
     six-dimensional phase space.
@@ -100,8 +101,8 @@ def distance_metric(
     float
         Six-dimensional distance
     """
-    return np.sum(np.square(rel_pos), axis=1) + \
-            lamb * tau_delta_sq * np.sum(np.square(rel_vel), axis=1)
+    return np.sum(np.square(rel_pos), axis=1) / sigma_x_sq + \
+            lamb * np.sum(np.square(rel_vel), axis=1) / sigma_v_sq
 
 
 def classify(
@@ -263,7 +264,7 @@ def classify_seeds_in_mini_box(
         # ======================================================================
         rel_pos = relative_coordinates(pos_seed_mb[i], pos_part, boxsize)
         rel_vel = vel_part - vel_seed_mb[i]
-        r200, m200, tau_delta_sq = \
+        r200, m200, sigma_x_sq, sigma_v_sq = \
             compute_halo_properties(rel_pos, rel_vel, part_mass, rhom, delta)
         
         # Classify
@@ -274,7 +275,7 @@ def classify_seeds_in_mini_box(
             continue
         
         # Compute phase space distance from particle to halo
-        dphsq = distance_metric(rel_pos, rel_vel, tau_delta_sq, lamb)
+        dphsq = distance_metric(rel_pos, rel_vel, sigma_x_sq, sigma_v_sq, lamb)
 
         # Select orbiting particles' PID
         row_idx_order = np.argsort(row_part[mask_orb])
@@ -317,7 +318,7 @@ def classify_seeds_in_mini_box(
          # If there are orbiting seeds, append them to the members list.
         if mask_orb_seed.sum() > 0:
             # Compute phase space distance from particle to halo
-            dphsq = distance_metric(rel_pos, rel_vel, tau_delta_sq, lamb)
+            dphsq = distance_metric(rel_pos, rel_vel, sigma_x_sq, sigma_v_sq, lamb)
 
             # Select orbiting particles' PID
             orb_pid_seed = hid_seed[mask_self][mask_orb_seed]
