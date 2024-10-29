@@ -204,12 +204,13 @@ def generate_mini_box_ids(
 def split_box_into_mini_boxes(
     positions: np.ndarray,
     velocities: np.ndarray,
-    pid: np.ndarray,
+    uid: np.ndarray,
     save_path: str,
     boxsize: float, 
     minisize: float,
     chunksize: int = 100_000,
     name: str = None,
+    props: Tuple[list, list] = None
 ) -> None:
     """Sorts all items into mini boxes and saves them in disc.
 
@@ -232,6 +233,8 @@ def split_box_into_mini_boxes(
     name : str, optional
         An additional name or identifier appended at the end of the file name, 
         by default None
+    props : tuple[list(array), list(str)], optional
+        Additional arrays to be sorted into mini boxes.
 
     Returns
     -------
@@ -279,7 +282,7 @@ def split_box_into_mini_boxes(
     mb_order = np.argsort(mini_box_ids)
 
     # Get smallest data type to represent IDs
-    uint_dtype_pid = get_np_unit_dytpe(np.max(pid))
+    uint_dtype_pid = get_np_unit_dytpe(np.max(uid))
 
     # Get smallest data type to represent the row index of each item
     n_items = mini_box_ids.shape[0]
@@ -292,7 +295,13 @@ def split_box_into_mini_boxes(
     velocities = velocities[mb_order]
     positions = positions[mb_order]
     row_idx = row_idx[mb_order]
-    pid = pid[mb_order]
+    uid = uid[mb_order]
+
+    if props:
+        labels = props[1]
+        props = props[0]
+        for k, item in enumerate(props):
+            props[k] = item[mb_order]
 
     # Get chunk slices
     n_items = mini_box_ids.shape[0]
@@ -316,9 +325,13 @@ def split_box_into_mini_boxes(
             chunk_idx.append(idx)
             break
 
-    
-    labels = ('ID', 'pos', 'vel', 'row_idx')
-    dtypes = (uint_dtype_pid, np.float32, np.float32, uint_dtype_row)
+    if props:
+        labels = ('ID', 'pos', 'vel', 'row_idx', *labels)
+        dtypes = (uint_dtype_pid, np.float32, np.float32, uint_dtype_row, 
+                  np.float32, np.float32)
+    else:
+        labels = ('ID', 'pos', 'vel', 'row_idx')
+        dtypes = (uint_dtype_pid, np.float32, np.float32, uint_dtype_row)
 
     # For each chunk
     for chunk_i in tqdm(range(len(chunk_idx)-1), desc='Processing chunks',
@@ -330,8 +343,13 @@ def split_box_into_mini_boxes(
         mb_chunk = mini_box_ids[low : upp]
         pos_chunk = positions[low : upp]
         vel_chunk = velocities[low : upp]
-        pid_chunk = pid[low : upp]
+        pid_chunk = uid[low : upp]
         row_chunk = row_idx[low : upp]
+
+        if props:
+            props_chunks = [None for _ in range(len(props))]
+            for k, item in enumerate(props):
+                props_chunks[k] = item[low : upp]
 
         # Check which mini box ids are in the chunk
         mb_chunk_low = mb_chunk[0]
@@ -346,12 +364,25 @@ def split_box_into_mini_boxes(
 
         # Save data per slice
         for i, mb_id in enumerate(range(mb_chunk_low, mb_chunk_upp)):
-            data = (
-                pid_chunk[indexed_slice[i] : indexed_slice[i+1]],
-                pos_chunk[indexed_slice[i] : indexed_slice[i+1]],
-                vel_chunk[indexed_slice[i] : indexed_slice[i+1]],
-                row_chunk[indexed_slice[i] : indexed_slice[i+1]],
-            )
+            if props:
+                data = (
+                    pid_chunk[indexed_slice[i] : indexed_slice[i+1]],
+                    pos_chunk[indexed_slice[i] : indexed_slice[i+1]],
+                    vel_chunk[indexed_slice[i] : indexed_slice[i+1]],
+                    row_chunk[indexed_slice[i] : indexed_slice[i+1]],
+                    *[
+                        item_chunk[indexed_slice[i] : indexed_slice[i+1]] \
+                            for item_chunk in props_chunks
+                    ],
+                )
+            else:
+                data = (
+                    pid_chunk[indexed_slice[i] : indexed_slice[i+1]],
+                    pos_chunk[indexed_slice[i] : indexed_slice[i+1]],
+                    vel_chunk[indexed_slice[i] : indexed_slice[i+1]],
+                    row_chunk[indexed_slice[i] : indexed_slice[i+1]],
+                )
+                
             with h5.File(save_dir + f'{mb_id}.hdf5', 'a') as hdf:
                 if not name in hdf.keys():
                     hdf.create_group(name)
@@ -527,7 +558,7 @@ def load_seeds(
         )
 
         # Create empty lists (containers) to save the data from file for each ID
-        pos, vel, pid, row = ([] for _ in range(4))
+        pos, vel, pid, row, r200, m200 = ([] for _ in range(6))
 
         # Load all adjacent boxes
         for mini_box in adj_mini_box_ids[adj_mini_box_ids!=mini_box_id]:
@@ -565,7 +596,14 @@ def load_seeds(
         return pos[mask], vel[mask], pid[mask], row[mask]
 
     else:
-        return _load_mini_box(mini_box_id, load_path, boxes_per_side,name='seed')
+        data = _load_mini_box(mini_box_id, load_path, boxes_per_side,name='seed')
+        # try:
+        file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box_id}.hdf5'
+        prefix = 'seed/'
+        with h5.File(load_path + file_name, 'r') as hdf:
+            r200 = hdf[prefix + 'R200b'][()]
+            m200 = hdf[prefix + 'M200b'][()]
+        return (*data, r200, m200)
 
 
 if __name__ == '__main__':
