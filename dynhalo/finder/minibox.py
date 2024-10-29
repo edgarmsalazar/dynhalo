@@ -597,13 +597,13 @@ def load_seeds(
 
     else:
         data = _load_mini_box(mini_box_id, load_path, boxes_per_side,name='seed')
-        # try:
         file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box_id}.hdf5'
         prefix = 'seed/'
         with h5.File(load_path + file_name, 'r') as hdf:
             r200 = hdf[prefix + 'R200b'][()]
             m200 = hdf[prefix + 'M200b'][()]
-        return (*data, r200, m200)
+
+        return *data, r200, m200
 
 
 if __name__ == '__main__':
