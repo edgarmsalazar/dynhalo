@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from dynhalo.finder.coordinates import relative_coordinates
+from dynhalo.finder.coordinates import relative_coordinates, distance_metric
 from dynhalo.finder.minibox import load_particles, load_seeds
 from dynhalo.utils import G_gravity, timer
 
@@ -71,38 +71,6 @@ def compute_halo_properties(
         sigma_v_sq = np.median(velsq[:loc2])
     
     return r200, m200, sigma_x_sq, sigma_v_sq
-
-
-def distance_metric(
-    rel_pos: np.ndarray,
-    rel_vel: np.ndarray,
-    sigma_x_sq: float,
-    sigma_v_sq: float,
-    lamb: float = 1.0,
-) -> float:
-    """Computes the distance between particles and halo centre in
-    six-dimensional phase space.
-
-    Parameters
-    ----------
-    rel_pos : np.ndarray
-        Relative position of paticles to halo
-    rel_vel : np.ndarray
-        Relative velocity of paticles to halo
-    sigma_x_sq : float
-        Position dispersion parameter 
-    sigma_v_sq : float
-        Velocity dispersion parameter 
-    lamb : float, optional
-        Scaling parameter in distance metric, by default 1.0
-
-    Returns
-    -------
-    float
-        Six-dimensional distance
-    """
-    return np.sum(np.square(rel_pos), axis=1) / sigma_x_sq + \
-            lamb * np.sum(np.square(rel_vel), axis=1) / sigma_v_sq
 
 
 def classify(
