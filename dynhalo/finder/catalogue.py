@@ -43,7 +43,7 @@ def compute_halo_properties(
     Returns
     -------
     Tuple[float]
-        Returns R200, M200 and tau_delta squared
+        Returns R200, M200, radial and velocity dispersions squared
     """
     dists = np.sqrt(np.sum(np.square(rel_pos), axis=1))
     argsort = np.argsort(dists)
@@ -70,8 +70,6 @@ def compute_halo_properties(
         sigma_x_sq = dists[loc2]**2
         sigma_v_sq = np.median(velsq[:loc2])
     
-    # tau_delta_sq = sigma_x_sq / sigma_v_sq
-
     return r200, m200, sigma_x_sq, sigma_v_sq
 
 
@@ -91,8 +89,10 @@ def distance_metric(
         Relative position of paticles to halo
     rel_vel : np.ndarray
         Relative velocity of paticles to halo
-    tau_delta_sq : float
-        Dispersion parameter in distance metric
+    sigma_x_sq : float
+        Position dispersion parameter 
+    sigma_v_sq : float
+        Velocity dispersion parameter 
     lamb : float, optional
         Scaling parameter in distance metric, by default 1.0
 
@@ -224,7 +224,7 @@ def classify_seeds_in_mini_box(
         os.makedirs(save_path)
 
     # Load seeds in mini box
-    pos_seed_mb, vel_seed_mb, hid_seed_mb, _ = \
+    pos_seed_mb, vel_seed_mb, hid_seed_mb, _, r200_mb, m200_mb = \
         load_seeds(mini_box_id, boxsize, minisize, load_path, padding)
     n_seeds = len(hid_seed_mb)
 
@@ -255,7 +255,7 @@ def classify_seeds_in_mini_box(
     halo_non_members = {}
     halo_subs = {}
 
-    col_names = ('OHID', 'pos', 'vel', 'R200m', 'M200m', 'Morb')
+    col_names = ('OHID', 'pos', 'vel', 'R200m', 'M200m', 'Morb', 'R200b', 'M200b')
     haloes = pd.DataFrame(columns=col_names)
 
     for i in range(n_seeds):
@@ -268,7 +268,7 @@ def classify_seeds_in_mini_box(
             compute_halo_properties(rel_pos, rel_vel, part_mass, rhom, delta)
         
         # Classify
-        mask_orb = classify(rel_pos, rel_vel, r200, m200, pars)
+        mask_orb = classify(rel_pos, rel_vel, r200_mb[i], m200_mb[i], pars)
         # Ignore seed if it does not have the minimum mass to be considered a
         # halo. Early exit to avoid further computation for a non-halo seed
         if mask_orb.sum() < min_num_part:
@@ -292,6 +292,8 @@ def classify_seeds_in_mini_box(
             r200,
             m200,
             part_mass * mask_orb.sum(),
+            r200_mb[i], 
+            m200_mb[i],
         ]
         halo_members[hid_seed_mb[i]] = {
             'PID': orb_pid,
@@ -300,7 +302,7 @@ def classify_seeds_in_mini_box(
         }
         # Save non-members up to a padding distance. This is helpful for
         # computing density profiles of non-orbiting particles.
-        non_members_mask = np.sum(np.square(rel_pos), axis=1) < 2 * padding
+        non_members_mask = np.sum(np.square(rel_pos), axis=1) < (padding)**2
         halo_non_members[hid_seed_mb[i]] = row_part[~mask_orb*non_members_mask]
 
         # ======================================================================
@@ -313,7 +315,7 @@ def classify_seeds_in_mini_box(
         rel_vel = vel_seed[mask_self] - vel_seed_mb[i]
 
         # Classify
-        mask_orb_seed = classify(rel_pos, rel_vel, r200, m200, pars)
+        mask_orb_seed = classify(rel_pos, rel_vel, r200_mb[i], m200_mb[i], pars)
 
          # If there are orbiting seeds, append them to the members list.
         if mask_orb_seed.sum() > 0:
