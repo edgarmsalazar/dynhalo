@@ -24,8 +24,12 @@ def _select_particles_around_haloes(
     part_mass: float,
     rhom: float,
 ) -> Tuple[np.ndarray]:
-    """Locates for the largest `v_max` seeds and searches for all the particles
+    """Locates for the largest `M_200b` seeds and searches for all the particles
     around them up to a distance `r_max`.
+
+    Only seeds that dominate their environment are eligible. This means that the 
+    mass of all other seeds up to a distance of 2*R_200b must be at most 20% the
+    mass of the seed.
 
     Parameters
     ----------
@@ -53,10 +57,11 @@ def _select_particles_around_haloes(
     """
     # Load seed data
     with h5.File(file_seeds, 'r') as hdf:
-        vmax = hdf['vmax'][()]
-        order = np.argsort(vmax)[::-1]
-
         hid = hdf['Orig_halo_ID'][()]
+        r200 = hdf['R200b'][()] / 1000.
+        m200 = hdf['M200b'][()]
+        order = np.argsort(m200)[::-1]
+
         pos_seed = np.vstack(
             [
                 hdf['x'][()],
@@ -71,17 +76,35 @@ def _select_particles_around_haloes(
                 hdf['vz'][()],
             ]
         ).T
-    vmax = vmax[order][:n_seeds]
-    hid = hid[order][:n_seeds]
-    pos_seed = pos_seed[order][:n_seeds]
-    vel_seed = vel_seed[order][:n_seeds]
+
+    hid = hid[order]
+    r200 = r200[order]
+    m200 = m200[order]
+    pos_seed = pos_seed[order]
+    vel_seed = vel_seed[order]
+
+    # Search for eligible seeds.
+    seed_i = []
+    i = 0
+    while len(seed_i) < n_seeds:
+        mask_x = np.abs(pos_seed[:, 0] - pos_seed[i, 0]) <= 2.*r200[i]
+        mask_y = np.abs(pos_seed[:, 1] - pos_seed[i, 1]) <= 2.*r200[i]
+        mask_z = np.abs(pos_seed[:, 2] - pos_seed[i, 2]) <= 2.*r200[i]
+        mask_close = mask_x * mask_y * mask_z
+        mask_self = m200 != m200[i]
+        if np.all(m200[mask_close & mask_self] < 0.2 * m200[i]):
+            seed_i.append(i)
+        i += 1
+
+    hid = hid[seed_i]
+    pos_seed = pos_seed[seed_i]
+    vel_seed = vel_seed[seed_i]
 
     # Locate mini box IDs for all seeds.
     seed_mini_box_id = get_mini_box_id(pos_seed, boxsize, minisize)
     # Sort by mini box ID
     order = np.argsort(seed_mini_box_id)
     seed_mini_box_id = seed_mini_box_id[order]
-    vmax = vmax[order]
     hid = hid[order]
     pos_seed = pos_seed[order]
     vel_seed = vel_seed[order]
@@ -113,7 +136,7 @@ def _select_particles_around_haloes(
             rel_pos = rel_pos[mask_close]
             rel_vel = vel[mask_close] - vel_seed[mask_seeds_in_mini_box][i]
             # Compute R200 and M200
-            r200, m200, _ = compute_halo_properties(rel_pos, rel_vel, part_mass, rhom)
+            r200, m200, *_ = compute_halo_properties(rel_pos, rel_vel, part_mass, rhom)
             # Compute V200
             v200sq = G_gravity * m200 / r200
             # Compute radial and tangential velocity
