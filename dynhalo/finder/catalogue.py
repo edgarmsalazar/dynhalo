@@ -243,6 +243,8 @@ def classify_seeds_in_mini_box(
             continue
         
         # Compute phase space distance from particle to halo
+        # sigma_x_sq = r200_mb[i]**2
+        # sigma_v_sq = G_gravity * m200_mb[i] / r200_mb[i]
         dphsq = distance_metric(rel_pos, rel_vel, sigma_x_sq, sigma_v_sq, lamb)
 
         # Select orbiting particles' PID
@@ -404,13 +406,15 @@ def classify_all_mini_boxes(
                   desc='Generating halo catalogue'))
 
     # # Consolidate catalogue
-    m200m, morb, ohid, r200m, pos, vel = ([] for _ in range(6))
+    m200m, morb, ohid, r200m, pos, vel, m200b, r200b = ([] for _ in range(8))
     files = os.listdir(save_path)
     for f in tqdm(files, ncols=100, desc='Merging catalogues', colour='green'):
         with h5.File(save_path+f, 'r') as hdf:
             if 'halo' in hdf.keys():
                 m200m.append(hdf['halo/M200m'][()])
                 r200m.append(hdf['halo/R200m'][()])
+                m200b.append(hdf['halo/M200b'][()])
+                r200b.append(hdf['halo/R200b'][()])
                 morb.append(hdf['halo/Morb'][()])
                 ohid.append(hdf['halo/OHID'][()])
                 pos.append(hdf['halo/pos'][()])
@@ -419,6 +423,8 @@ def classify_all_mini_boxes(
     with h5.File(load_path + f'run_{dir_name}/temp_catalogue.hdf5', 'w') as hdf:
         hdf.create_dataset('M200m', data=np.concatenate(m200m))
         hdf.create_dataset('R200m', data=np.concatenate(r200m))
+        hdf.create_dataset('M200b', data=np.concatenate(m200b))
+        hdf.create_dataset('R200b', data=np.concatenate(r200b))
         hdf.create_dataset('OHID', data=np.concatenate(ohid))
         hdf.create_dataset('Morb', data=np.concatenate(morb))
         hdf.create_dataset('pos', data=np.concatenate(pos))
@@ -805,6 +811,316 @@ def percolate_particles(
 
 
 @timer
+def percolate_most_massive(
+    save_path: str,
+    min_num_part: int,
+    part_mass: float,
+    dir_name: str,
+) -> None:
+    # \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+    # //////////////////////////////////////////////////////////////////////////
+    # 
+    #                           Percolate Particles
+    # 
+    # \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+    # //////////////////////////////////////////////////////////////////////////
+    # Load parent candidates
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
+        ohids = hdf['OHID'][()]
+        morb = hdf['Morb'][()]
+
+    # Load members
+    halo_memb_temp = {}
+    halo_non_memb_temp = {}
+    with h5.File(save_path + f'run_{dir_name}/temp_members_part.hdf5', 'r') as hdf:
+        file_keys = list(hdf.keys())
+        for key in tqdm(file_keys, ncols=100, colour='blue', desc='Loading members'):
+            # Only load members of parent haloes.
+            # NOTE: we do not care about the distance `dph` because all shared
+            # particles are always assigned to the most massive parent.
+            if int(key) in ohids:
+                halo_memb_temp[int(key)] = {
+                    'PID': hdf[key]['PID'][()],
+                    'row_idx': hdf[key]['row_idx'][()],
+                }
+                halo_non_memb_temp[int(key)] = \
+                    hdf[key]['row_idx_inf'][()]
+    
+    # ==========================================================================
+    #                                   Step 1
+    # 
+    #   Particles may orbit at most one halo.
+    #   Particles orbit the most massive structure
+    # 
+    # ==========================================================================
+    # By definition, any one particle may only orbit a single halo at a time.
+    # Because the orbiting classification of a particle occurs irrespective of 
+    # any previous associations, it can happen that a single particle is orbiting 
+    # more than one halo at a time (multiple membership). We keep membership to 
+    # the most massive structure.
+    # ==========================================================================
+    # Reverse the members dictionary. PID: HID and PID: dph
+    members_rev = defaultdict(list)
+    members_keys = np.array([item for item in halo_memb_temp.keys()])
+    for hid in tqdm(members_keys, ncols=100, colour='blue',
+                    desc='Reversing dicts'):
+        for sub_hid in [*halo_memb_temp[hid]['PID']]:
+            members_rev[sub_hid].append(hid)
+
+    # Look for repeated members
+    repeated_members = []
+    for sub_hid, elements in members_rev.items():
+        if len(elements) > 1:
+            repeated_members.append(sub_hid)
+
+    # Create a dictionary with the objects marked for removal per halo. HID: PID
+    pids_to_remove = defaultdict(list)
+    for pid in tqdm(repeated_members, ncols=100, colour='blue', 
+                    desc='Checking repetitions'):
+        current_pid = np.array(members_rev[pid])
+        mask_ohids = np.isin(ohids, current_pid)
+        ohid_max = ohids[mask_ohids][np.argmax(morb[mask_ohids])]
+        mask_remove = current_pid != ohid_max
+
+        for hid in current_pid[mask_remove]:
+            pids_to_remove[hid].append(pid)
+
+    # Create a new members and non-members catalogues
+    halo_memb = {}
+    halo_non_memb = {}
+    removed_haloes = []
+    pids_to_remove_keys = np.array([item for item in pids_to_remove.keys()])
+    for hid in tqdm(members_keys, ncols=100, colour='blue',
+                    desc='Cleaning members'):
+        # If HID has members maked for removal
+        if hid in pids_to_remove_keys:
+            pid_remove = pids_to_remove[int(hid)]
+            mask_keep = np.isin(
+                halo_memb_temp[hid]['PID'],
+                pid_remove,
+                assume_unique=True,
+                invert=True,
+            )
+            
+            # If it no longer has the minimum mass to be considered a halo
+            if mask_keep.sum() < min_num_part:
+                removed_haloes.append(hid)
+
+            halo_memb[hid] = {
+                'PID': halo_memb_temp[hid]['PID'][mask_keep],
+                'row_idx': halo_memb_temp[hid]['row_idx'][mask_keep],
+            }
+            # Removed members are now non-members
+            halo_non_memb[hid] = np.sort(
+                np.concatenate(
+                    [
+                        halo_non_memb_temp[hid], 
+                        halo_memb_temp[hid]['row_idx'][~mask_keep]
+                    ]
+                )
+            )
+            
+        # If no members marked for removal, simply copy all items
+        else:
+            halo_memb[hid] = halo_memb_temp[hid]
+            halo_non_memb[hid] = halo_non_memb_temp[hid]
+
+    # ==========================================================================
+    #                                   Step 2
+    # 
+    #   Mass recomputation
+    # 
+    # ==========================================================================
+    # Now that the parents have been percolated, the orbiting mass has changed
+    # and needs to be recomputed.
+    # ==========================================================================
+    morb_new = np.zeros_like(morb)
+
+    members_keys = np.array([item for item in halo_memb.keys()])
+    for i, hid in enumerate(tqdm(ohids, ncols=100, colour='green',
+                            desc='Computing Morb')):
+        # Set mass to zero if object is no longer a halo or is not a parent
+        if (hid in removed_haloes) or (hid not in members_keys):
+            continue
+        # Compute the orbiting mass otherwise.
+        else:
+            # print(i, morb_new[i])
+            # print(part_mass)
+            # print(halo_memb[hid])
+            # print(halo_memb[hid]['PID'])
+            # print(len(halo_memb[hid]['PID']))
+            morb_new[i] = part_mass * len(halo_memb[hid]['PID'])
+
+    # ==========================================================================
+    #                               Save results
+    # ==========================================================================
+    # Create new halo catalogue with the remaining haloes and subs (as long as 
+    # Morb > 0)
+    mask_morb = (morb_new > 0) & np.isin(ohids, removed_haloes, invert=True)
+
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf_raw, \
+        h5.File(save_path + f'run_{dir_name}/temp_catalogue_perc.hdf5', 'w') as hdf:
+        for key in hdf_raw.keys():
+            hdf.create_dataset(key, data=hdf_raw[f'{key}'][mask_morb])
+        hdf.create_dataset('Morb_perc', data=morb_new[mask_morb])
+    
+    # Create members catalogue for parent haloes only.
+    with h5.File(save_path + f'run_{dir_name}/members.hdf5', 'w') as hdf:
+        # Only save members of parent haloes.
+        for hid in tqdm(ohids[mask_morb], ncols=100, 
+                        colour='green', desc='Saving members'):
+            hdf.create_dataset(f'{hid}/PID', data=halo_memb[hid]['PID'])
+            hdf.create_dataset(f'{hid}/row_idx', data=halo_memb[hid]['row_idx'])
+            hdf.create_dataset(f'{hid}/row_idx_inf', data=halo_non_memb[hid])
+
+    # \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+    # //////////////////////////////////////////////////////////////////////////
+    # 
+    #                           Percolate Haloes
+    # 
+    # \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+    # //////////////////////////////////////////////////////////////////////////
+    # Load parent candidates
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue_perc.hdf5', 'r') as hdf:
+        ohids = hdf['OHID'][()]
+        morb = hdf['Morb_perc'][()]
+        # Rank order haloes by mass
+        morb_order = np.argsort(morb)[::-1]
+    morb = morb[morb_order]
+    ohids = ohids[morb_order]
+
+    # Load members
+    halo_memb = {}
+    with h5.File(save_path + f'run_{dir_name}/temp_members_halo.hdf5', 'r') as hdf:
+        for key in tqdm(hdf.keys(), ncols=100, colour='blue',
+                        desc='Loading members'):
+            halo_memb[int(key)] = hdf[key]['OHID'][()]
+    
+    # Select hales with members only
+    members_keys = np.array([item for item in halo_memb.keys()])
+    mask_with_subs = np.isin(ohids, members_keys, assume_unique=True)
+    ohids_with_subs = ohids[mask_with_subs]
+
+    # ==========================================================================
+    #                                   Step 1
+    # 
+    #   Objects may only orbit more massive structures.
+    # 
+    # ==========================================================================
+    # It can happen that two or more haloes are mutually orbiting. However, a
+    # more massive halo cannot orbit a smaller one (by definition). Therefore,
+    # we rank order all haloes, and remove all orbiting haloes that are more
+    # massive than the halo itself.
+    # ==========================================================================
+    halo_memb_temp = {}
+    # Skip over first item
+    for i in tqdm(range(1, len(ohids_with_subs)), ncols=100,
+                  colour='blue', desc='Establishing hierarchy'): 
+        ohid_current = ohids_with_subs[i]
+        members_current = halo_memb[ohid_current]
+        
+        # More massive HIDs
+        ohid_massive = ohids_with_subs[:i]
+        # Does the current halo has any more massive member?
+        mask_is_more_massive = np.isin(members_current, ohid_massive)
+        # If so, select only those members with smaller mass.
+        if mask_is_more_massive.sum() != 0:
+            mask_is_less_massive = np.isin(members_current, ohid_massive, 
+                                           invert=True)
+        # If all members are less massive, select all members and keep them.
+        else:
+            mask_is_less_massive = np.full(members_current.shape[0], True)
+
+        # If there are any members left, save them into a new dictionary
+        if mask_is_less_massive.sum() != 0:
+            halo_memb_temp[ohid_current] = members_current[mask_is_less_massive]
+    
+    # ==========================================================================
+    #                                   Step 2
+    # 
+    #   Objects may orbit at most one structure.
+    # 
+    # ==========================================================================
+    # By definition, any one object may only orbit a single structure at a time.
+    # Because the orbiting classification of an object occurs irrespective of 
+    # any previous associations, it can happen that a single object is orbiting 
+    # more than one halo at a time (multiple membership). We find all parents 
+    # and keep membership to the closest parent, thus removing membership from 
+    # all others.
+    # ==========================================================================
+    # Reverse the members dictionary. PID: HID and PID: dph
+    members_rev = defaultdict(list)
+
+    members_keys = np.array([item for item in halo_memb_temp.keys()])
+    for hid in tqdm(members_keys, ncols=100, colour='blue',
+                    desc='Reversing dicts'):
+        for sub_hid in [*halo_memb_temp[hid]]:
+            members_rev[sub_hid].append(hid)
+
+    # Look for repeated members
+    repeated_members = []
+    for sub_hid, elements in members_rev.items():
+        if len(elements) > 1:
+            repeated_members.append(sub_hid)
+
+    # Create a dictionary with the objects marked for removal per halo. HID: PID
+    sub_hids_to_remove = defaultdict(list)
+    for sub_hid in tqdm(repeated_members, ncols=100, colour='blue', 
+                    desc='Checking repetitions'):
+        current_sub_hid = np.array(members_rev[sub_hid])
+        mask_ohids = np.isin(ohids, current_sub_hid)
+        ohid_max = ohids[mask_ohids][np.argmax(morb[mask_ohids])]
+        mask_remove = current_sub_hid != ohid_max
+
+        for hid in current_sub_hid[mask_remove]:
+            sub_hids_to_remove[hid].append(sub_hid)
+
+    # Create a new members catalogue.
+    halo_memb = {}
+    sub_hids_to_remove_keys = np.array([item for item in sub_hids_to_remove.keys()])
+    for hid in tqdm(members_keys, ncols=100, colour='blue', desc='Cleaning members'):
+        # If HID has members maked for removal
+        if hid in sub_hids_to_remove_keys:
+            pid_remove = sub_hids_to_remove[hid]
+            mask_keep = np.isin(
+                halo_memb_temp[hid],
+                pid_remove,
+                assume_unique=True,
+                invert=True
+            )
+            # If there are no members left move to the next item.
+            if mask_keep.sum() == 0:
+                continue
+
+            halo_memb[hid] = halo_memb_temp[hid][mask_keep]
+        # If no members marked for removal, simply copy
+        else:
+            halo_memb[hid] = halo_memb_temp[hid]
+
+    # Load parent candidates
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue_perc.hdf5', 'r') as hdf:
+        ohids = hdf['OHID'][()]
+    pids = np.full(ohids.shape[0], fill_value=-1, dtype=np.int32)
+    
+    # Set the parent halo ID for all members.
+    for hid, value in tqdm(halo_memb.items(), ncols=100, colour='green',
+                           desc='Tagging parents'):
+        mask = np.isin(ohids, value, assume_unique=True)
+        pids[mask] = hid
+
+    # ==========================================================================
+    #                               Save results
+    # ==========================================================================
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue_perc.hdf5', 'r') as hdf_raw, \
+        h5.File(save_path + f'run_{dir_name}/catalogue.hdf5', 'w') as hdf:
+        for key in hdf_raw.keys():
+            hdf.create_dataset(key, data=hdf_raw[f'{key}'])
+        hdf.create_dataset('PID', data=pids)
+    
+    return
+
+
+@timer
 def generate_catalogue(
     load_path: str,
     min_num_part: int,
@@ -839,6 +1155,45 @@ def generate_catalogue(
     )
     
     percolate_particles(
+        save_path=load_path,
+        min_num_part=min_num_part,
+        part_mass=part_mass,
+        dir_name=dir_name,
+    )
+
+    return None
+
+
+@timer
+def generate_catalogue_most_massive(
+    load_path: str,
+    min_num_part: int,
+    part_mass: float,
+    rhom: float,
+    boxsize: float,
+    minisize: float,
+    dir_name: str,
+    delta: Any = 'rockstar',
+    lamb: float = 1.0,
+    padding: float = 5.0,
+    n_threads: int = None,
+):
+
+    classify_all_mini_boxes(
+        load_path=load_path,
+        min_num_part=min_num_part,
+        part_mass=part_mass,
+        rhom=rhom,
+        boxsize=boxsize,
+        minisize=minisize,
+        dir_name=dir_name,
+        delta=delta,
+        lamb=lamb,
+        padding=padding,
+        n_threads=n_threads,
+    )
+
+    percolate_most_massive(
         save_path=load_path,
         min_num_part=min_num_part,
         part_mass=part_mass,

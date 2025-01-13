@@ -375,8 +375,8 @@ def calibrate_finder(
     popt, _ = curve_fit(lambda x, m, b: m * x + b, r_grad, min_grad, p0=[-1, 2])
     m_pos, b01 = popt
 
-    # Find intercept by finding the value that contains 96% of particles below
-    # the line.
+    # Find intercept by finding the value that contains 'perc' percent of
+    #  particles below the line at fixed slope 'm_pos'.
     res = minimize(
         cost_percentile,
         1.1 * b01,
@@ -393,7 +393,8 @@ def calibrate_finder(
     m_neg, b02 = popt
 
     # Find intercept by finding the value that maximizes the perpendicular
-    # distance between points to the line.
+    # distance to the line at fixed slope of all points within a perpendicular
+    # 'width' distance from the line (ignoring all others).
     res = minimize(
         cost_perp_distance,
         0.75 * b02,
