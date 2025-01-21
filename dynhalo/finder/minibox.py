@@ -210,7 +210,7 @@ def split_box_into_mini_boxes(
     minisize: float,
     chunksize: int = 100_000,
     name: str = None,
-    props: Tuple[list, list] = None
+    props: Tuple[list, list, list] = None
 ) -> None:
     """Sorts all items into mini boxes and saves them in disc.
 
@@ -233,7 +233,7 @@ def split_box_into_mini_boxes(
     name : str, optional
         An additional name or identifier appended at the end of the file name, 
         by default None
-    props : tuple[list(array), list(str)], optional
+    props : tuple[list(array), list(str), list(dtype)], optional
         Additional arrays to be sorted into mini boxes.
 
     Returns
@@ -298,8 +298,9 @@ def split_box_into_mini_boxes(
     uid = uid[mb_order]
 
     if props:
-        labels = props[1]
         props = props[0]
+        labels = props[1]
+        dtypes = props[2]
         for k, item in enumerate(props):
             props[k] = item[mb_order]
 
@@ -328,7 +329,7 @@ def split_box_into_mini_boxes(
     if props:
         labels = ('ID', 'pos', 'vel', 'row_idx', *labels)
         dtypes = (uint_dtype_pid, np.float32, np.float32, uint_dtype_row, 
-                  np.float32, np.float32)
+                  *dtypes)
     else:
         labels = ('ID', 'pos', 'vel', 'row_idx')
         dtypes = (uint_dtype_pid, np.float32, np.float32, uint_dtype_row)
