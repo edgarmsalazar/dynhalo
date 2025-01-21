@@ -118,9 +118,10 @@ def classify(
     mask_cut_neg = part_ln_vel < (m_neg * part_radius + b_neg)
 
     # Particle is infalling if it is below both lines and 2*R00
-    mask_orb = \
+    mask_orb = (part_radius <= 2.0) & (
         (mask_cut_pos & mask_vr_positive) ^ \
         (mask_cut_neg & ~mask_vr_positive)
+    )
 
     return mask_orb
 
