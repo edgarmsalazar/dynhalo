@@ -53,14 +53,14 @@ def _select_particles_around_haloes(
     Returns
     -------
     Tuple[np.ndarray]
-        Radial distance, radial velocity, and log of the square of the velocity
+        Radial distance, radial velocity, and log of the square of the velocity 
+        in units of R200m and M200m.
     """
     # Load seed data
     with h5.File(file_seeds, 'r') as hdf:
         hid = hdf['Orig_halo_ID'][()]
-        r200 = hdf['R200b'][()] / 1000.
+        r200 = hdf['R200b'][()] / 1000. # Rockstar R200b is given in kpc/h
         m200 = hdf['M200b'][()]
-        order = np.argsort(m200)[::-1]
 
         pos_seed = np.vstack(
             [
@@ -77,6 +77,8 @@ def _select_particles_around_haloes(
             ]
         ).T
 
+    # Rank order by mass.
+    order = np.argsort(m200)[::-1]
     hid = hid[order]
     r200 = r200[order]
     m200 = m200[order]
@@ -84,9 +86,17 @@ def _select_particles_around_haloes(
     vel_seed = vel_seed[order]
 
     # Search for eligible seeds.
+    # A seed is considered eligible if it dominates its own environment. This is
+    # enforced by requiring that the next most-massive seed within 2*R200 is, at
+    # least five times smaller than the seed, i.e. has a mass <= 20% of M200.
+    # The loop will stop once it has found `n_seeds` eligible seeds.
     seed_i = []
     i = 0
     while len(seed_i) < n_seeds:
+        # Exit the loop if there are no more seeds in the list.
+        if i >= len(hid)-1: 
+            print(f'Only found {i}/{n_seeds} seeds.')
+            break
         mask_x = np.abs(pos_seed[:, 0] - pos_seed[i, 0]) <= 2.*r200[i]
         mask_y = np.abs(pos_seed[:, 1] - pos_seed[i, 1]) <= 2.*r200[i]
         mask_z = np.abs(pos_seed[:, 2] - pos_seed[i, 2]) <= 2.*r200[i]
