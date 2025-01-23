@@ -196,6 +196,10 @@ def generate_mini_box_ids(
         file_name = f'mini_box_id_nside_{boxes_per_side}.hdf5'
     with h5.File(save_path + file_name, 'w') as hdf:
         hdf.create_dataset('MBID', data=ids, dtype=uint_dtype)
+    
+    # Function hangs not closing the file above. This forces to close the file 
+    # and continue execution. Not fancy but works.
+    print()
 
     return None
 
@@ -266,7 +270,7 @@ def split_box_into_mini_boxes(
             positions=positions, 
             boxsize=boxsize, 
             minisize=minisize,
-            path=save_path,
+            save_path=save_path,
             chunksize=chunksize,
             name=name,
             )
@@ -298,9 +302,9 @@ def split_box_into_mini_boxes(
     uid = uid[mb_order]
 
     if props:
-        props = props[0]
         labels = props[1]
         dtypes = props[2]
+        props = props[0]
         for k, item in enumerate(props):
             props[k] = item[mb_order]
 
@@ -313,7 +317,7 @@ def split_box_into_mini_boxes(
     while True:
         if i > i_max:
             print(chunk_idx, i, upp)
-            raise RuntimeError(f'Maximum iterations reached i_max = {i_max}' + \
+            raise RuntimeError(f'Maximum iterations reached i_max = {i_max} ' + \
                                'Chunk size too small. Please increase it.')
         low = chunk_idx[-1]
         upp = low + chunksize
