@@ -386,7 +386,8 @@ def calibrate_finder(
     mask_r = r < 2.0
 
     # For vr > 0 ===============================================================
-    r_grad, min_grad = gradient_minima(r, lnv2, mask_vr_pos, n_points, *grad_lims)
+    r_grad, min_grad = gradient_minima(r, lnv2, mask_vr_pos, n_points, 
+                                       *grad_lims)
     # Find slope by fitting to the minima.
     popt, _ = curve_fit(lambda x, m, b: m * x + b, r_grad, min_grad, p0=[-1, 2])
     m_pos, b01 = popt
@@ -403,7 +404,8 @@ def calibrate_finder(
     b_pos = res.x[0]
 
     # For vr < 0 ===============================================================
-    r_grad, min_grad = gradient_minima(r, lnv2, mask_vr_neg, n_points, *grad_lims)
+    r_grad, min_grad = gradient_minima(r, lnv2, mask_vr_neg, n_points, 
+                                       *grad_lims)
     # Find slope by fitting to the minima.
     popt, _ = curve_fit(lambda x, m, b: m * x + b, r_grad, min_grad, p0=[-1, 2])
     m_neg, b02 = popt
