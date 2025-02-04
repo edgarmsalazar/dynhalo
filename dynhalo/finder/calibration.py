@@ -1,4 +1,3 @@
-import os
 from typing import Tuple
 
 import h5py as h5
@@ -6,7 +5,6 @@ import numpy as np
 from scipy.optimize import curve_fit, minimize
 from tqdm import tqdm
 
-from dynhalo.finder.catalogue import compute_halo_properties
 from dynhalo.finder.coordinates import (get_vr_vt_from_coordinates,
                                         relative_coordinates)
 from dynhalo.finder.minibox import get_mini_box_id, load_particles
@@ -134,31 +132,39 @@ def _select_particles_around_haloes(
         mask_seeds_in_mini_box = seed_mini_box_id == mini_box_id
         for i in range(mask_seeds_in_mini_box.sum()):
             # Compute the relative positions of all particles in the box
-            rel_pos = relative_coordinates(pos_seed[mask_seeds_in_mini_box][i], pos,
-                                           boxsize)
+            rel_pos = relative_coordinates(pos_seed[mask_seeds_in_mini_box][i], 
+                                           pos, boxsize)
             # Only work with those close to the seed
             mask_x = np.abs(rel_pos[:, 0]) <= r_max
             mask_y = np.abs(rel_pos[:, 1]) <= r_max
             mask_z = np.abs(rel_pos[:, 2]) <= r_max
             mask_close = mask_x * mask_y * mask_z
 
-            # pos_i = pos[mask_close]
             rel_pos = rel_pos[mask_close]
             rel_vel = vel[mask_close] - vel_seed[mask_seeds_in_mini_box][i]
+            
+            # Compute radial distance, radial and tangential velocities
+            rps = np.sqrt(np.sum(np.square(rel_pos), axis=1))
+            vrp, _, v2p = get_vr_vt_from_coordinates(rel_pos, rel_vel)
+
             # Compute R200 and M200
-            r200, m200, *_ = compute_halo_properties(rel_pos, rel_vel, part_mass, rhom)
+            rps_prof = rps[np.argsort(rps)]
+            mass_prof = part_mass * (1+np.arange(len(rps))) / \
+                (4 / 3 * np.pi * rps_prof ** 3)
+            rho200_loc = np.argmax(mass_prof <= 200 * rhom)
+            r200 = rps_prof[rho200_loc]
+            m200 = mass_prof[rho200_loc]
+
             # Compute V200
             v200sq = G_gravity * m200 / r200
-            # Compute radial and tangential velocity
-            vrp, _, v2p = get_vr_vt_from_coordinates(rel_pos, rel_vel)
-            # Resale by v200
+            
+            # Resale quantities
+            rps /= r200
             vrp /= np.sqrt(v200sq)
             v2p /= v200sq
-            # Compute the radial separation rescaled by R200
-            rp = np.sqrt(np.sum(np.square(rel_pos), axis=1)) / r200
 
             # Append to containers
-            r.append(rp)
+            r.append(rps)
             vr.append(vrp)
             lnv2.append(np.log(v2p))
 
@@ -215,14 +221,14 @@ def get_calibration_data(
         return r, vr, lnv2
     except:
         r, vr, lnv2 = _select_particles_around_haloes(
-            n_seeds,
-            r_max,
-            boxsize,
-            minisize,
-            file_seeds,
-            save_path,
-            part_mass,
-            rhom,
+            n_seeds=n_seeds,
+            r_max=r_max,
+            box_size=boxsize,
+            minisize=minisize,
+            file_seeds=file_seeds,
+            save_path=save_path,
+            part_mass=part_mass,
+            rhom=rhom,
         )
 
         with h5.File(file_name, 'w') as hdf:

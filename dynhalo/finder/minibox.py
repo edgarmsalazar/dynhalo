@@ -459,6 +459,7 @@ def load_particles(
             pos[i] = hdf['part/pos'][()]
             vel[i] = hdf['part/vel'][()]
             pid[i] = hdf['part/ID'][()]
+
     # Concatenate into a single array
     pos = np.concatenate(pos)
     vel = np.concatenate(vel)
@@ -563,6 +564,7 @@ def load_seeds(
         absolute_rel_pos = np.abs(
             relative_coordinates(grid_pos[loc_id], pos, boxsize, periodic=True)
         )
+
         # Probably a better way to create this mask
         mask = (absolute_rel_pos[:, 0] < padded_distance) & \
         (absolute_rel_pos[:, 1] < padded_distance) & \
@@ -571,6 +573,7 @@ def load_seeds(
         return pos[mask], vel[mask], pid[mask], r200[mask], m200[mask], rs[mask]
 
     else:
+        # Load seeds in minibox and exit.
         file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box_id}.hdf5'
         with h5.File(load_path + file_name, 'r') as hdf:
             pos = hdf['seed/pos'][()]
