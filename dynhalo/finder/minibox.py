@@ -106,7 +106,8 @@ def get_adjacent_mini_box_ids(
     minisize: float,
 ) -> np.ndarray:
     """Returns a list of all IDs that are adjacent to the specified mini box ID.
-    There are always 27 adjacent boxes in a 3D volume, including the specified ID.
+    There are always 27 adjacent boxes in a 3D volume, including the specified 
+    ID.
 
     Parameters
     ----------
@@ -317,7 +318,7 @@ def split_box_into_mini_boxes(
     while True:
         if i > i_max:
             print(chunk_idx, i, upp)
-            raise RuntimeError(f'Maximum iterations reached i_max = {i_max} ' + \
+            raise RuntimeError(f'Maximum iterations reached i_max = {i_max} '+ \
                                'Chunk size too small. Please increase it.')
         low = chunk_idx[-1]
         upp = low + chunksize
@@ -360,8 +361,8 @@ def split_box_into_mini_boxes(
         mb_chunk_low = mb_chunk[0]
         mb_chunk_upp = mb_chunk[-1] + 1
 
-        # Get index (search sorted style) of the first occurence of each distinct 
-        # mini box id. Append a -1 at the end for completeness.
+        # Get index (search sorted style) of the first occurence of each 
+        # distinct mini box id. Append a -1 at the end for completeness.
         indexed_slice = []
         for mb_id in range(mb_chunk_low, mb_chunk_upp):
             indexed_slice.append(np.argmin(mb_chunk - mb_id))
@@ -399,50 +400,6 @@ def split_box_into_mini_boxes(
     return None
 
 
-def _load_mini_box(
-    mini_box_id: int,
-    load_path: str,
-    boxes_per_side: int,
-    name: str = None,
-) -> Tuple[np.ndarray]:
-    """Load seed or particle data in mini box
-
-    Parameters
-    ----------
-    mini_box_id : int
-        Sub-box ID
-    path : str
-        Location from where to load the file
-    boxes_per_side : int
-        Number of partitions per side of the simulation box
-    name : str, optional
-        Identifier within the file: seed or particle. If `None`, the method 
-        returns None for each array. By default None
-
-    Returns
-    -------
-    Tuple[np.ndarray]
-        Position, velocity, ID and row index.
-
-    None if mini box file does not exist or `name` was set to None.
-
-    """
-    if name:
-        prefix = f'{name}/'
-    else:
-        prefix = None
-    try:
-        file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box_id}.hdf5'
-        with h5.File(load_path + file_name, 'r') as hdf:
-            pos = hdf[prefix + 'pos'][()]
-            vel = hdf[prefix + 'vel'][()]
-            pid = hdf[prefix + 'ID'][()]
-            row = hdf[prefix + 'row_idx'][()]
-    except:
-        pos, vel, pid, row = None, None, None, None
-    return pos, vel, pid, row
-
-
 def load_particles(
     mini_box_id: int,
     boxsize: float,
@@ -470,7 +427,7 @@ def load_particles(
     Returns
     -------
     Tuple[np.ndarray]
-        Position, velocity, ID and row index
+        Position, velocity, and PID
     """
     # Determine number of partitions per side
     boxes_per_side = np.int_(np.ceil(boxsize / minisize))
@@ -479,41 +436,48 @@ def load_particles(
     grid_ids, grid_pos = generate_mini_box_grid(boxsize, minisize)
 
     # Get the adjacent mini box IDs
-    adj_mini_box_ids = get_adjacent_mini_box_ids(
+    mini_box_ids = get_adjacent_mini_box_ids(
         mini_box_id=mini_box_id,
         mini_box_ids=grid_ids,
         positions=grid_pos,
         boxsize=boxsize,
         minisize=minisize
     )
+    n_boxes = len(mini_box_ids)
 
     # Create empty lists (containers) to save the data from file for each ID
-    pos, vel, pid, row = ([[] for _ in range(len(adj_mini_box_ids))]
-                          for _ in range(4))
+    pos, vel, pid = (
+        [
+            [] for _ in range(n_boxes)
+        ] for _ in range(3)
+    )
 
     # Load all adjacent boxes
-    for i, mini_box in enumerate(adj_mini_box_ids):
-        pos[i], vel[i], pid[i], row[i] = _load_mini_box(
-            mini_box, load_path, boxes_per_side, name='part')
+    for i, mini_box in enumerate(mini_box_ids):
+        file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box}.hdf5'
+        with h5.File(load_path + file_name, 'r') as hdf:
+            pos[i] = hdf['part/pos'][()]
+            vel[i] = hdf['part/vel'][()]
+            pid[i] = hdf['part/ID'][()]
     # Concatenate into a single array
     pos = np.concatenate(pos)
     vel = np.concatenate(vel)
     pid = np.concatenate(pid)
-    row = np.concatenate(row)
 
     # Mask particles within a padding distance of the edge of the box in each
     # direction
     loc_id = grid_ids == mini_box_id
     padded_distance = 0.5 * minisize + padding
-    rel_abs_position = np.abs(relative_coordinates(
-        grid_pos[loc_id], pos, boxsize, periodic=True))
+    absolute_rel_pos = np.abs(
+        relative_coordinates(grid_pos[loc_id], pos, boxsize, periodic=True)
+    )
+    
     # Probably a better way to create this mask
-    mask_x = (rel_abs_position[:, 0] < padded_distance)
-    mask_y = (rel_abs_position[:, 1] < padded_distance)
-    mask_z = (rel_abs_position[:, 2] < padded_distance)
-    mask = mask_x & mask_y & mask_z
+    mask = (absolute_rel_pos[:, 0] < padded_distance) & \
+        (absolute_rel_pos[:, 1] < padded_distance) & \
+            (absolute_rel_pos[:, 2] < padded_distance)
 
-    return pos[mask], vel[mask], pid[mask], row[mask]
+    return pos[mask], vel[mask], pid[mask]
 
 
 def load_seeds(
@@ -545,7 +509,7 @@ def load_seeds(
     Returns
     -------
     Tuple[np.ndarray]
-        Position, velocity, ID and row index
+        Position, velocity, ID, R200b, M200b and Rs
     """
     # Determine number of partitions per side
     boxes_per_side = np.int_(np.ceil(boxsize / minisize))
@@ -554,61 +518,69 @@ def load_seeds(
         # Generate the IDs and positions of the mini box grid
         grid_ids, grid_pos = generate_mini_box_grid(boxsize, minisize)
         # Get the adjacent mini box IDs
-        adj_mini_box_ids = get_adjacent_mini_box_ids(
+        mini_box_ids = get_adjacent_mini_box_ids(
             mini_box_id=mini_box_id,
             mini_box_ids=grid_ids,
             positions=grid_pos,
             boxsize=boxsize,
             minisize=minisize
         )
+        # Ignore central mini box
+        adj_mini_box_ids = mini_box_ids[mini_box_ids != mini_box_id]
+        n_boxes = len(adj_mini_box_ids)
 
         # Create empty lists (containers) to save the data from file for each ID
-        pos, vel, pid, row, r200, m200 = ([] for _ in range(6))
+        pos, vel, hid, r200, m200, rs = (
+            [
+                [] for _ in range(n_boxes)
+            ] for _ in range(6)
+        )
 
         # Load all adjacent boxes
-        for mini_box in adj_mini_box_ids[adj_mini_box_ids!=mini_box_id]:
-            if mini_box == mini_box_id:
-                continue
-            else:
-                postemp, veltemp, pidtemp, rowtemp = _load_mini_box(
-                    mini_box, load_path, boxes_per_side, name='seed')
-                # If no seeds where found
-                if any([p is None for p in (postemp, veltemp, pidtemp, rowtemp)]):
-                    continue
-                else:
-                    pos.append(postemp)
-                    vel.append(veltemp)
-                    pid.append(pidtemp)
-                    row.append(rowtemp)
+        for i, mini_box in enumerate(adj_mini_box_ids):
+            file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box}.hdf5'
+            with h5.File(load_path + file_name, 'r') as hdf:
+                pos[i] = hdf['seed/pos'][()]
+                vel[i] = hdf['seed/vel'][()]
+                hid[i] = hdf['seed/ID'][()]
+                r200[i] = hdf['seed/R200b'][()]
+                m200[i] = hdf['seed/M200b'][()]
+                rs[i] = hdf['seed/Rs'][()]
+        
         # Concatenate into a single array
         pos = np.concatenate(pos)
         vel = np.concatenate(vel)
         pid = np.concatenate(pid)
         row = np.concatenate(row)
+        r200 = np.concatenate(r200)
+        m200 = np.concatenate(m200)
+        rs = np.concatenate(rs)
 
         # Mask seeds within a padding distance of the edge of the box in each
         # direction
         loc_id = grid_ids == mini_box_id
         padded_distance = 0.5 * minisize + padding
-        rel_abs_position = np.abs(relative_coordinates(
-            grid_pos[loc_id], pos, boxsize, periodic=True))
+        absolute_rel_pos = np.abs(
+            relative_coordinates(grid_pos[loc_id], pos, boxsize, periodic=True)
+        )
         # Probably a better way to create this mask
-        mask_x = (rel_abs_position[:, 0] < padded_distance)
-        mask_y = (rel_abs_position[:, 1] < padded_distance)
-        mask_z = (rel_abs_position[:, 2] < padded_distance)
-        mask = mask_x & mask_y & mask_z
+        mask = (absolute_rel_pos[:, 0] < padded_distance) & \
+        (absolute_rel_pos[:, 1] < padded_distance) & \
+            (absolute_rel_pos[:, 2] < padded_distance)
 
-        return pos[mask], vel[mask], pid[mask], row[mask]
+        return pos[mask], vel[mask], pid[mask], r200[mask], m200[mask], rs[mask]
 
     else:
-        data = _load_mini_box(mini_box_id, load_path, boxes_per_side,name='seed')
         file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box_id}.hdf5'
-        prefix = 'seed/'
         with h5.File(load_path + file_name, 'r') as hdf:
-            r200 = hdf[prefix + 'R200b'][()]
-            m200 = hdf[prefix + 'M200b'][()]
+            pos = hdf['seed/pos'][()]
+            vel = hdf['seed/vel'][()]
+            hid = hdf['seed/ID'][()]
+            r200 = hdf['seed/R200b'][()]
+            m200 = hdf['seed/M200b'][()]
+            rs = hdf['seed/Rs'][()]
 
-        return *data, r200, m200
+        return pos, vel, hid, r200, m200, rs
 
 
 if __name__ == '__main__':
