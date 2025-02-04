@@ -128,7 +128,7 @@ def _select_particles_around_haloes(
     # NOTE: Could parallelise this but it is not super slow
     for mini_box_id in tqdm(unique_mini_box_ids, desc='Processing mini box',
                         colour='blue', ncols=100):
-        pos, vel, _, _ = load_particles(mini_box_id, boxsize, minisize, save_path)
+        pos, vel, *_ = load_particles(mini_box_id, boxsize, minisize, save_path)
 
         # Iterate over seeds in current mini box ID
         mask_seeds_in_mini_box = seed_mini_box_id == mini_box_id
@@ -386,7 +386,7 @@ def calibrate_finder(
     m_pos, b01 = popt
 
     # Find intercept by finding the value that contains 'perc' percent of
-    #  particles below the line at fixed slope 'm_pos'.
+    # particles below the line at fixed slope 'm_pos'.
     res = minimize(
         cost_percentile,
         1.1 * b01,
