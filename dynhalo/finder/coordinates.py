@@ -98,11 +98,11 @@ def characteristic_density(
     Returns
     -------
     float
-        concentration and delta characteristic
+        Delta characteristic
     """
     c200 = r200 / rs
     delta = ((200./3.) * c200) / (np.log(1 + c200) - (c200 / (1 + c200)))
-    return c200, delta
+    return delta
 
 
 if __name__ == "__main__":
