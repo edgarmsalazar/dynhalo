@@ -1,5 +1,4 @@
 import os
-from collections import defaultdict
 from functools import partial
 from multiprocessing import Pool
 from typing import Any, List, Tuple, Union
@@ -8,69 +7,63 @@ from warnings import filterwarnings
 import h5py as h5
 import numpy as np
 import pandas as pd
+from scipy.optimize import fsolve
 from tqdm import tqdm
 
-from dynhalo.finder.coordinates import relative_coordinates, distance_metric
+from dynhalo.finder.coordinates import (characteristic_density,
+                                        relative_coordinates)
 from dynhalo.finder.minibox import load_particles, load_seeds
 from dynhalo.utils import G_gravity, timer
 
 filterwarnings('ignore')
 
 
-def compute_halo_properties(
-    rel_pos: np.ndarray,
-    rel_vel: np.ndarray,
-    part_mass: float,
-    rhom: float,
-    delta: Any = 'rockstar',
-) -> Tuple[float]:
-    """Compute halo radius, mass and dispersion parameter
+def rho_nfw_roots(
+    x: float,
+    delta1: float,
+    delta2: float,
+    rs1: float,
+    rs2: float,
+    r12: float,
+) -> float:
+    """Returns the value of 
+
+    \begin{equation*}
+        \frac{\rho_1(R-r)}{\rho_{c}} &= \frac{\rho_2(r)}{\rho_{c}}
+    \end{equation*}
+    
+    where $\rho(r)$ is the NFW profile.
+
+    \begin{equation*}
+        \frac{\rho(r)}{\rho_{c}} = 
+            \frac{\delta_c}{\frac{r}{R_s}\left(1+\frac{r}{R_s}\right)^2}
+    \end{equation*}
 
     Parameters
     ----------
-    rel_pos : np.ndarray
-        Relative position of paticles to halo
-    rel_vel : np.ndarray
-        Relative velocity of paticles to halo
-    part_mass : float
-        Particle mass
-    rhom : float
-        Mass density of the universe
-    delta : Any, optional
-        Delta parameter for the distance metric. If 'rockstar' is selected then
-        the distance metric from Behroozi (2012) is used. By default 'rockstar'
+    x : float
+        Radial coordinate
+    delta1 : float
+        Characteristic density of the central object
+    delta2 : float
+        Characteristic density of the substructure
+    rs1 : float
+        Scale radius of the central object
+    rs2 : float
+        Scale radius of the substructure
+    r12 : float
+        Radial separation between central and substructure R=|x2-x1|.
 
     Returns
     -------
-    Tuple[float]
-        Returns R200, M200, radial and velocity dispersions squared
+    float
+        
     """
-    dists = np.sqrt(np.sum(np.square(rel_pos), axis=1))
-    argsort = np.argsort(dists)
-
-    dists = dists[argsort]
-    velsq = np.sum(np.square(rel_vel), axis=1)[argsort]
-    mass_prof = part_mass * np.arange(1, len(dists)+1)
-
-    # Get R200 and M200
-    loc = np.argmax(mass_prof / (4 / 3 * np.pi * dists ** 3) <= 200 * rhom)
-    r200 = dists[loc]
-    m200 = mass_prof[loc]
-
-    if delta == 'rockstar':
-        # Get v_max
-        vel_prof_sq = G_gravity * mass_prof / dists
-        vmax = np.max(vel_prof_sq)
-        # Eq 4 in P. Behroozi (2012) ROCKSTAR paper.
-        sigma_x_sq = vmax**2 / (G_gravity * 200 * rhom * 4 * np.pi / 3)
-        sigma_v_sq = np.var(rel_vel)
-    else:
-        # Get R_Delta
-        loc2 = np.argmax(mass_prof / (4 / 3 * np.pi * dists ** 3) <= delta * rhom)
-        sigma_x_sq = dists[loc2]**2
-        sigma_v_sq = np.median(velsq[:loc2])
-    
-    return r200, m200, sigma_x_sq, sigma_v_sq
+    x1 = (r12 - x) / rs1
+    x2 = x / rs2
+    frac1 = delta1 / (x1 * (1 + x1)**2)
+    frac2 = delta2 / (x2 * (1 + x2)**2)
+    return frac1 - frac2
 
 
 def classify(
@@ -79,6 +72,7 @@ def classify(
     r200: float,
     m200: float,
     class_pars: Union[List, Tuple, np.ndarray],
+    max_radius: float = 2.0
 ) -> np.ndarray:
     """Classifies particles as orbiting.
 
@@ -94,6 +88,9 @@ def classify(
         Seed M200
     class_pars : Union[List, Tuple, np.ndarray]
         Classification parameters [m_pos, b_pos, m_neg, b_neg]
+    max_radius : float
+        Maximum radius where orbiting particles can be found. All particles 
+        above this value are set to be infalling. By default 2.0.
 
     Returns
     -------
@@ -118,7 +115,7 @@ def classify(
     mask_cut_neg = part_ln_vel < (m_neg * part_radius + b_neg)
 
     # Particle is infalling if it is below both lines and 2*R00
-    mask_orb = (part_radius <= 2.0) & (
+    mask_orb = (part_radius <= max_radius) & (
         (mask_cut_pos & mask_vr_positive) ^ \
         (mask_cut_neg & ~mask_vr_positive)
     )
@@ -126,36 +123,17 @@ def classify(
     return mask_orb
 
 
-def classify_seeds_in_mini_box(
+def classify_single_mini_box(
     mini_box_id: int,
     min_num_part: int,
-    part_mass: float,
-    rhom: float,
     boxsize: float,
     minisize: float,
     load_path: str,
     dir_name: str,
-    delta: Any = 'rockstar',
-    lamb: float = 1.0,
     padding: float = 5.0,
+    disable_tqdm: bool = True,
 ) -> None:
-    """Runs the classifier for each seed in a mini box.
-    Additionally, percolates all found haloes by:
-        1. Resolves parent-sub halo relationship by only allowing less massive
-           structures to orbit more massive ones.
-        2. Assigns shared sub-haloes between parents to the closest parent.
-        3. Assigns shared particles between parents to the closest parent.
-    The distance metric is the phase-space distance:
-    \begin{equation*}
-    d^{2} = \frac{|\vec{x}_p - \vec{x}_h|^2}{r_{v_\max}^2} + 
-                \frac{|\vec{v}_p - \vec{v}_h|^2}{\sigma_v^2}
-    \end{equation*}
-    where
-    \begin{equation*}
-    r_{v_\max}^2 = \frac{v_{\max}^2}{\frac{4\pi}{3}G\rho_{200}}
-    \end{equation*}
-    
-    See P. Behroozi (2013) for a discussion on this metric.
+    """Runs the classifier for each seed in a mini box...
 
     Parameters
     ----------
@@ -163,10 +141,6 @@ def classify_seeds_in_mini_box(
         Sub-box ID
     min_num_part : int
         Minimum number of particles needed to be considered a halo
-    part_mass : float
-        Mass per particle
-    rhom : float
-        Matter density of the universe
     boxsize : float
         Size of simulation box
     minisize : float
@@ -175,11 +149,6 @@ def classify_seeds_in_mini_box(
         Location from where to load the file
     dir_name : str
         Label for the current run. The directory created will be `run_dir_name`.
-    delta : Any, optional
-        Delta parameter for the distance metric. If 'rockstar' is selected then
-        the distance metric from Behroozi (2012) is used. By default 'rockstar'
-    lamb : float, optional
-        Scaling parameter in distance metric, by default 1.0
     padding : float
         Only particles up to this distance from the mini box edge are considered 
         for classification. Defaults to 5
@@ -193,7 +162,7 @@ def classify_seeds_in_mini_box(
         os.makedirs(save_path)
 
     # Load seeds in mini box
-    pos_seed_mb, vel_seed_mb, hid_seed_mb, _, r200_mb, m200_mb = \
+    pos_seed_mb, vel_seed_mb, hid_seed_mb, r200b_mb, m200b_mb, rs_mb = \
         load_seeds(mini_box_id, boxsize, minisize, load_path, padding)
     n_seeds = len(hid_seed_mb)
 
@@ -202,106 +171,170 @@ def classify_seeds_in_mini_box(
         return None
 
     # Load adjacent seeds
-    pos_seed_adj, vel_seed_adj, hid_seed_adj, _ = \
-        load_seeds(mini_box_id, boxsize, minisize,
-                   load_path, padding, adjacent=True)
-    
+    pos_seed, vel_seed, hid_seed, r200b_seed, m200b_seed, rs_seed = \
+        load_seeds(mini_box_id, boxsize, minisize, load_path, padding, 
+                   adjacent=True)
+
     # Concatenate all seeds for ease of selection.
-    hid_seed = np.hstack([hid_seed_mb, hid_seed_adj])
-    pos_seed = np.vstack([pos_seed_mb, pos_seed_adj])
-    vel_seed = np.vstack([vel_seed_mb, vel_seed_adj])
+    hid_seed = np.hstack([hid_seed_mb, hid_seed])
+    pos_seed = np.vstack([pos_seed_mb, pos_seed])
+    vel_seed = np.vstack([vel_seed_mb, vel_seed])
+    r200b_seed = np.hstack([r200b_mb, r200b_seed])
+    m200b_seed = np.hstack([m200b_mb, m200b_seed])
+    rs_seed = np.hstack([rs_mb, rs_seed])
+
+    # Concentration parameter and characteristic density
+    deltac_mb = characteristic_density(r200b_mb, rs_mb)
+    deltac_seed = characteristic_density(r200b_seed, rs_seed)
 
     # Load particles
-    pos_part, vel_part, pid_part, row_part = \
+    pos_part, vel_part, pid_part = \
         load_particles(mini_box_id, boxsize, minisize, load_path, padding)
     
     # Load calibration parameters
     with h5.File(load_path + 'calibration_pars.hdf5', 'r') as hdf:
         pars = (*hdf['pos'][()], *hdf['neg'][()])
 
-    # Create empty catalog of found halos and a dictionary with the PIDs.
-    halo_members = {}
-    halo_non_members = {}
-    halo_subs = {}
-
-    col_names = ('OHID', 'pos', 'vel', 'R200m', 'M200m', 'Morb', 'R200b', 'M200b')
+    col_names = ('Orig_halo_ID', 'Norb', 'LIDX', 'UIDX', 'SLIDX', 'SUIDX')
     haloes = pd.DataFrame(columns=col_names)
+    
+    pid_out, subhaloes = [[] for _ in range(2)]
+    n_tot = 0
+    n_tot_sub = 0
 
-    for i in range(n_seeds):
+    for i in tqdm(range(n_seeds), ncols=100, desc='Finding haloes', 
+                  colour='green', disable=disable_tqdm):
         # ======================================================================
         #                           Classify particles
         # ======================================================================
         rel_pos = relative_coordinates(pos_seed_mb[i], pos_part, boxsize)
         rel_vel = vel_part - vel_seed_mb[i]
-        r200, m200, sigma_x_sq, sigma_v_sq = \
-            compute_halo_properties(rel_pos, rel_vel, part_mass, rhom, delta)
-        
+
+        # Only work with particles within a 2*R200b cube box to speedup
+        # computations. Probably a better way to create this mask?
+        r_max = 2.0 * r200b_mb[i]
+        box3d = (np.abs(rel_pos[:, 0]) <= r_max) & \
+                (np.abs(rel_pos[:, 1]) <= r_max) & \
+                (np.abs(rel_pos[:, 2]) <= r_max)
+
+        rel_pos_box3d = rel_pos[box3d]
+        rel_vel_box3d = rel_vel[box3d]
+
         # Classify
-        mask_orb = classify(rel_pos, rel_vel, r200_mb[i], m200_mb[i], pars)
+        mask_orb = classify(rel_pos_box3d, rel_vel_box3d, r200b_mb[i], 
+                            m200b_mb[i], pars)
+
         # Ignore seed if it does not have the minimum mass to be considered a
         # halo. Early exit to avoid further computation for a non-halo seed
-        if mask_orb.sum() < min_num_part:
+        is_halo = mask_orb.sum() >= min_num_part
+        if not is_halo:
             continue
         
-        # Compute phase space distance from particle to halo
-        # sigma_x_sq = r200_mb[i]**2
-        # sigma_v_sq = G_gravity * m200_mb[i] / r200_mb[i]
-        dphsq = distance_metric(rel_pos, rel_vel, sigma_x_sq, sigma_v_sq, lamb)
-
-        # Select orbiting particles' PID
-        row_idx_order = np.argsort(row_part[mask_orb])
-        orb_pid = pid_part[mask_orb][row_idx_order]
-        orb_arg = row_part[mask_orb][row_idx_order]
-        orb_dph = dphsq[mask_orb][row_idx_order]
-
-        # Append halo to catalogue if there are at least min_dm_part orbiting
-        # particles.
-        haloes.loc[len(haloes.index)] = [
-            hid_seed_mb[i],
-            pos_seed_mb[i],
-            vel_seed_mb[i],
-            r200,
-            m200,
-            part_mass * mask_orb.sum(),
-            r200_mb[i], 
-            m200_mb[i],
-        ]
-        halo_members[hid_seed_mb[i]] = {
-            'PID': orb_pid,
-            'row_idx': orb_arg,
-            'dph': orb_dph,
-        }
-        # Save non-members up to a padding distance. This is helpful for
-        # computing density profiles of non-orbiting particles.
-        non_members_mask = np.sum(np.square(rel_pos), axis=1) < (padding)**2
-        halo_non_members[hid_seed_mb[i]] = row_part[~mask_orb*non_members_mask]
-
         # ======================================================================
         #                           Classify seeds
         # ======================================================================
+        # Seeds inherit the classification from the bulk of particles within a 
+        # 6D ball around it. If the fraction of orbiting particles within the 
+        # ball is greater than 50%, the seed is orbtiing. The seed is infalling
+        # otherwise, and all orbiting particles within the 6D ball are also 
+        # infalling.
+        # ======================================================================
         # Ignore current seed.
         mask_self = hid_seed != hid_seed_mb[i]
-        rel_pos = relative_coordinates(
-            pos_seed_mb[i], pos_seed[mask_self], boxsize)
+
+        rel_pos = relative_coordinates(pos_seed_mb[i], pos_seed, boxsize)
         rel_vel = vel_seed[mask_self] - vel_seed_mb[i]
+        
+        # Only work with seeds within a 2*R200b cube sphere. 
+        box3d_seed = mask_self & \
+            (np.sum(np.square(rel_pos), axis=1) <= r_max**2)
 
-        # Classify
-        mask_orb_seed = classify(rel_pos, rel_vel, r200_mb[i], m200_mb[i], pars)
+        # If there are seeds in the vicinity
+        orb_hid_seed = []
+        slidx = -1
+        suidx = -1
+        if box3d_seed.sum() > 0:
+            pos_seed_box3d = pos_seed[box3d_seed]
+            vel_seed_box3d = vel_seed[box3d_seed]
+            deltac_seed_box3d = deltac_seed[box3d_seed]
+            rs_seed_box3d = rs_seed[box3d_seed]
 
-         # If there are orbiting seeds, append them to the members list.
-        if mask_orb_seed.sum() > 0:
-            # Compute phase space distance from particle to halo
-            dphsq = distance_metric(rel_pos, rel_vel, sigma_x_sq, sigma_v_sq, lamb)
+            j = 0 
+            while is_halo and (j < box3d_seed.sum()):
+                # Select particles around jth seed.
+                rel_pos_part = relative_coordinates(pos_seed_box3d[j],
+                                                    pos_part[box3d], boxsize)
+                rel_vel_part = vel_part[box3d] - vel_seed_box3d[j]
+                rps = np.sum(np.square(rel_pos_part), axis=1)
+                vps = np.sum(np.square(rel_vel_part), axis=1)
 
-            # Select orbiting particles' PID
-            orb_pid_seed = hid_seed[mask_self][mask_orb_seed]
-            orb_dph_seed = dphsq[mask_orb_seed]
+                # Distance from the current seed to the substructure.
+                r_dist = np.linalg.norm(rel_pos[box3d_seed][j])
+                # Distance from the substructure where the NFW density of both
+                # objects is equal. Defines the search radius of the 6D ball.
+                r_ball = fsolve(
+                    func=rho_nfw_roots, 
+                    x0=r_dist/2, 
+                    args=(
+                        deltac_mb[i],
+                        deltac_seed_box3d[j],
+                        rs_mb[i],
+                        rs_seed_box3d[j],
+                        r_dist
+                    )
+                )
 
-            halo_subs[hid_seed_mb[i]] = {
-                'OHID': orb_pid_seed,
-                'dph': orb_dph_seed,
-            }
+                # V200 of the jth seed.
+                v200bsq_seed = G_gravity * m200b_seed[box3d_seed][j] / \
+                    r200b_seed[box3d_seed][j]
+                v_fac = 2
+                ball6d = (rps <= r_ball**2) & (vps <= (v_fac**2)*v200bsq_seed)
+                
+                # Check the fraction of orbiting particles in the 6D ball
+                frac_inside = (ball6d * mask_orb).sum() / ball6d.sum()
 
+                # If more than half the particles in the vicinity of the seed 
+                # are orbiting, the seed is tagged as orbiting.
+                if frac_inside > 0.5:
+                    orb_hid_seed.append(hid_seed[box3d_seed][j])
+                    mask_orb[ball6d] = True
+                # The seed is infalling otherwise and all the particles within 
+                # the box are tagged as infalling too.
+                else:
+                    mask_orb[ball6d] = False
+
+                # Check wether seed is still a halo.
+                is_halo = mask_orb.sum() >= min_num_part
+                
+                # Next item.
+                j += 1
+        
+        if is_halo:
+            n_orb_subs = len(orb_hid_seed)
+            if n_orb_subs > 0:
+                # If there are orbiting seeds, append them to the members list.
+                subhaloes.append(orb_hid_seed)
+                
+                # Save subhalo indices
+                slidx = n_tot_sub
+                suidx = n_tot_sub + n_orb_subs
+                n_tot_sub += n_orb_subs
+
+            # Append halo to catalogue =========================================
+            haloes.loc[len(haloes.index)] = [
+                hid_seed_mb[i],
+                mask_orb.sum(),
+                n_tot,
+                n_tot + mask_orb.sum(),
+                slidx,
+                suidx
+            ]
+
+            n_tot += mask_orb.sum()
+            
+            # Save particles
+            pid_out.append(pid_part[box3d][mask_orb])
+            
     # ==========================================================================
     #                           Save catalogue
     # ==========================================================================
@@ -313,30 +346,17 @@ def classify_seeds_in_mini_box(
     with h5.File(save_path + f'{mini_box_id}.hdf5', 'w') as hdf:
         # Halo catalogue
         for i, key in enumerate(haloes.columns):
-            if key in ["pos", "vel"]:
-                data = np.stack(haloes[key].values)
-            else:
-                data = haloes[key].values
+            data = haloes[key].values
             hdf.create_dataset(f'halo/{key}', data=data)
 
-        # Halo members: particles
-        # Dataset names must be strings (thus are not properly sorted)
-        for item, _ in halo_members.items():
-            hdf.create_dataset(f'members/part/{str(item)}/PID',
-                               data=halo_members[item]['PID'])
-            hdf.create_dataset(f'members/part/{str(item)}/dph',
-                               data=halo_members[item]['dph'])
-            hdf.create_dataset(f'members/part/{str(item)}/row_idx',
-                               data=halo_members[item]['row_idx'])
-            hdf.create_dataset(f'non_members/part/{str(item)}/row_idx',
-                               data=halo_non_members[item])
+        # Particles
+        hdf.create_dataset('part/PID', data=np.concatenate(pid_out), 
+                           dtype=np.dtype(pid_part[0]))
+            
         # Halo members: seeds
-        if len(halo_subs.keys()) > 0:
-            for item, _ in halo_subs.items():
-                hdf.create_dataset(f'members/halo/{str(item)}/OHID',
-                                   data=halo_subs[item]['OHID'])
-                hdf.create_dataset(f'members/halo/{str(item)}/dph',
-                                   data=halo_subs[item]['dph'])
+        if len(subhaloes) > 0:
+            hdf.create_dataset('subs/Orig_halo_ID', 
+                               data=np.concatenate(subhaloes))
 
     return None
 
@@ -344,14 +364,10 @@ def classify_seeds_in_mini_box(
 @timer
 def classify_all_mini_boxes(
     load_path: str,
+    dir_name: str,
     min_num_part: int,
-    part_mass: float,
-    rhom: float,
     boxsize: float,
     minisize: float,
-    dir_name: str,
-    delta: Any,
-    lamb: float,
     padding: float,
     n_threads: int = None,
 ) -> None:
@@ -364,21 +380,12 @@ def classify_all_mini_boxes(
         Location from where to load the file
     min_num_part : int
         Minimum number of particles needed to be considered a halo
-    part_mass : float
-        Mass per particle
-    rhom : float
-        Matter density of the universe
     boxsize : float
         Size of simulation box
     minisize : float
         Size of mini box
     dir_name : str
         Label for the current run. The directory created will be `run_dir_name`.
-    delta : Any, optional
-        Delta parameter for the distance metric. If 'rockstar' is selected then
-        the distance metric from Behroozi (2012) is used. By default 'rockstar'
-    lamb : float, optional
-        Scaling parameter in distance metric, by default 1.0
     padding : float, optional
         Only particles up to this distance from the mini box edge are considered 
         for classification. Defaults to 5
@@ -393,614 +400,164 @@ def classify_all_mini_boxes(
     save_path = load_path + f'run_{dir_name}/mini_box_catalogues/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-
+    
+    # Number of miniboxes
     n_mini_boxes = np.int_(np.ceil(boxsize / minisize))**3
 
-    func = partial(classify_seeds_in_mini_box, min_num_part=min_num_part,
-                   part_mass=part_mass, rhom=rhom, boxsize=boxsize, 
-                   load_path=load_path, minisize=minisize, padding=padding, 
-                   dir_name=dir_name, delta=delta, lamb=lamb)
-
+    # Parallel processing of miniboxes.
+    func = partial(classify_single_mini_box, min_num_part=min_num_part,
+                   boxsize=boxsize, load_path=load_path, minisize=minisize, 
+                   padding=padding, dir_name=dir_name, disable_tqdm=True)
     with Pool(n_threads) as pool:
         list(tqdm(pool.imap(func, range(n_mini_boxes)),
                   total=n_mini_boxes, colour="green", ncols=100,
                   desc='Generating halo catalogue'))
 
-    # # Consolidate catalogue
-    m200m, morb, ohid, r200m, pos, vel, m200b, r200b = ([] for _ in range(8))
-    files = os.listdir(save_path)
-    for f in tqdm(files, ncols=100, desc='Merging catalogues', colour='green'):
-        with h5.File(save_path+f, 'r') as hdf:
-            if 'halo' in hdf.keys():
-                m200m.append(hdf['halo/M200m'][()])
-                r200m.append(hdf['halo/R200m'][()])
-                m200b.append(hdf['halo/M200b'][()])
-                r200b.append(hdf['halo/R200b'][()])
-                morb.append(hdf['halo/Morb'][()])
-                ohid.append(hdf['halo/OHID'][()])
-                pos.append(hdf['halo/pos'][()])
-                vel.append(hdf['halo/vel'][()])
+    # Consolidate catalogue
+    ohid, norb, lidx, uidx, slidx, suidx, subs = ([] for _ in range(7))
+    n_part = 0
+    n_subs = 0
+    first_file = True
+    
+    # Saved datasets
+    with h5.File(save_path + '0.hdf5', 'r') as hdf:
+        keys_part = list(hdf['part'].keys())
+
+    hdf_part = h5.File(load_path + f'run_{dir_name}/temp_members.hdf5', 'w')
+    for i in tqdm(range(n_mini_boxes), ncols=100, desc='Merging catalogues', 
+                  colour='green'):
+        with h5.File(save_path + f'{i}.hdf5', 'r') as hdf_load:
+            if 'halo' not in hdf_load.keys():
+                continue
+            # Number of particles in current file
+            n_part_this = hdf_load['part/PID'].shape[0]
+            n_subs_this = hdf_load['subs/Orig_halo_ID'].shape[0]
+
+            # This reshaping of the dataset after every new file...
+            if first_file:  # Create the dataset at first pass.
+                for key in keys_part:
+                    hdf_part.create_dataset(name=f'part/{key}',
+                                            chunks=True, maxshape=(None,),
+                                            data=hdf_load[f'part/{key}'][()])
+                first_file = False
+            else:
+                # Number of particles so far plus this file's total.
+                new_shape = n_part + n_part_this
+                for key in keys_part:
+                    name = f'part/{key}'
+                    # Resize axes
+                    hdf_part[name].resize((new_shape), axis=0)
+                    # Save incoming data
+                    hdf_part[name][n_part:] = hdf_load[name][()]
+            
+            # Subs. Only shift indices for haloes with subhaloes
+            temp_l = hdf_load['halo/SLIDX'][()]
+            temp_l[temp_l != -1] += n_subs
+            temp_u = hdf_load['halo/SUIDX'][()]
+            temp_u[temp_u != -1] += n_subs
+
+            # Halo data
+            norb.append(hdf_load['halo/Norb'][()])
+            ohid.append(hdf_load['halo/Orig_halo_ID'][()])
+            lidx.append(hdf_load['halo/LIDX'][()] + n_part)
+            uidx.append(hdf_load['halo/UIDX'][()] + n_part)
+            subs.append(hdf_load['subs/Orig_halo_ID'][()])
+            slidx.append(temp_l)
+            suidx.append(temp_u)
+
+            # Add the total number of particles in this file to the next.
+            n_part += n_part_this
+            n_subs += n_subs_this
+
+    hdf_part.close()
+
+    with h5.File(load_path + f'run_{dir_name}/temp_members.hdf5', 'a') as hdf:
+        hdf.create_dataset('subs/Orig_halo_ID', data=np.concatenate(subs))
 
     with h5.File(load_path + f'run_{dir_name}/temp_catalogue.hdf5', 'w') as hdf:
-        hdf.create_dataset('M200m', data=np.concatenate(m200m))
-        hdf.create_dataset('R200m', data=np.concatenate(r200m))
-        hdf.create_dataset('M200b', data=np.concatenate(m200b))
-        hdf.create_dataset('R200b', data=np.concatenate(r200b))
-        hdf.create_dataset('OHID', data=np.concatenate(ohid))
-        hdf.create_dataset('Morb', data=np.concatenate(morb))
-        hdf.create_dataset('pos', data=np.concatenate(pos))
-        hdf.create_dataset('vel', data=np.concatenate(vel))
+        hdf.create_dataset('Orig_halo_ID', data=np.concatenate(ohid))
+        hdf.create_dataset('Norb', data=np.concatenate(norb))
+        hdf.create_dataset('LIDX', data=np.concatenate(lidx))
+        hdf.create_dataset('UIDX', data=np.concatenate(uidx))
+        hdf.create_dataset('SLIDX', data=np.concatenate(slidx))
+        hdf.create_dataset('SUIDX', data=np.concatenate(suidx))
 
-    # Consolidate members catalogue
-    # Process haloes
-    with h5.File(load_path + f'run_{dir_name}/temp_members_halo.hdf5', 'w') as hdf:
-        for f in tqdm(files, ncols=100, desc='Merging members', colour='green'):
-            with h5.File(save_path + f, 'r') as hdf_load:
-                if 'members' in hdf_load.keys():
-                    if 'halo' in hdf_load['members'].keys():
-                        for hid in hdf_load['members/halo'].keys():
-                            hdf.create_dataset(
-                                f'{hid}/OHID',
-                                data=hdf_load[f'members/halo/{hid}/OHID'][()])
-                            hdf.create_dataset(
-                                f'{hid}/dph',
-                                data=hdf_load[f'members/halo/{hid}/dph'][()])
-                        
-    # Process particles
-    with h5.File(load_path + f'run_{dir_name}/temp_members_part.hdf5', 'w') as hdf:
-        for f in tqdm(files, ncols=100, desc='Merging members', colour='green'):
-            with h5.File(save_path + f, 'r') as hdf_load:
-                if 'members' in hdf_load.keys():
-                    for hid in hdf_load['members/part'].keys():
-                        hdf.create_dataset(
-                            f'{hid}/PID',
-                            data=hdf_load[f'members/part/{hid}/PID'][()])
-                        hdf.create_dataset(
-                            f'{hid}/dph',
-                            data=hdf_load[f'members/part/{hid}/dph'][()])
-                        hdf.create_dataset(
-                            f'{hid}/row_idx',
-                            data=hdf_load[f'members/part/{hid}/row_idx'][()])
-                        hdf.create_dataset(
-                            f'{hid}/row_idx_inf',
-                            data=hdf_load[f'non_members/part/{hid}/row_idx'][()])
-    
     return None
 
 
 @timer
 def percolate_haloes(
+    file_seeds: str,
     save_path: str,
-    dir_name: str,
-) -> None:
-    """Percolate parent halo candidates.
-
-    Parameters
-    ----------
-    path : str
-        Location from where to load the file
-    dir_name : str
-        Label for the current run. The directory created will be `run_dir_name`.
-
-    Returns
-    -------
-    None
-    """
-    # Load parent candidates
-    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
-        ohids = hdf['OHID'][()]
-        # Rank order haloes by mass
-        morb_order = np.argsort(hdf['Morb'][()])[::-1]
-    ohids = ohids[morb_order]
-
-    # Load members
-    halo_memb = {}
-    with h5.File(save_path + f'run_{dir_name}/temp_members_halo.hdf5', 'r') as hdf:
-        for key in tqdm(hdf.keys(), ncols=100, colour='blue',
-                        desc='Loading members'):
-            halo_memb[int(key)] = {
-                'OHID': hdf[key]['OHID'][()],
-                'dph': hdf[key]['dph'][()],
-            }
-    
-    # Select hales with members only
-    members_keys = np.array([item for item in halo_memb.keys()])
-    mask_with_subs = np.isin(ohids, members_keys, assume_unique=True)
-    ohids_with_subs = ohids[mask_with_subs]
-    
-    # ==========================================================================
-    #                                   Step 1
-    # 
-    #   Objects may only orbit more massive structures.
-    # 
-    # ==========================================================================
-    # It can happen that two or more haloes are mutually orbiting. However, a
-    # more massive halo cannot orbit a smaller one (by definition). Therefore,
-    # we rank order all haloes, and remove all orbiting haloes that are more
-    # massive than the halo itself.
-    # ==========================================================================
-    halo_memb_temp = {}
-    # Skip over first item
-    for i in tqdm(range(1, len(ohids_with_subs)), ncols=100,
-                  colour='blue', desc='Establishing hierarchy'): 
-        ohid_current = ohids_with_subs[i]
-        members_current = halo_memb[ohid_current]['OHID']
-        
-        # More massive HIDs
-        ohid_massive = ohids_with_subs[:i]
-        # Does the current halo has any more massive member?
-        mask_is_more_massive = np.isin(members_current, ohid_massive)
-        # If so, select only those members with smaller mass.
-        if mask_is_more_massive.sum() != 0:
-            mask_is_less_massive = np.isin(members_current, ohid_massive, 
-                                           invert=True)
-        # If all members are less massive, select all members and keep them.
-        else:
-            mask_is_less_massive = np.full(members_current.shape[0], True)
-
-        # If there are any members left, save them into a new dictionary
-        if mask_is_less_massive.sum() != 0:
-            halo_memb_temp[ohid_current] = {
-                'OHID': members_current[mask_is_less_massive],
-                'dph': halo_memb[ohid_current]['dph'][mask_is_less_massive],
-            }
-
-    # ==========================================================================
-    #                                   Step 2
-    # 
-    #   Objects may orbit at most one structure.
-    # 
-    # ==========================================================================
-    # By definition, any one object may only orbit a single structure at a time.
-    # Because the orbiting classification of an object occurs irrespective of 
-    # any previous associations, it can happen that a single object is orbiting 
-    # more than one halo at a time (multiple membership). We find all parents 
-    # and keep membership to the closest parent, thus removing membership from 
-    # all others.
-    # ==========================================================================
-    # Reverse the members dictionary. PID: HID and PID: dph
-    members_rev = defaultdict(list)
-    dph_rev = defaultdict(list)
-
-    members_keys = np.array([item for item in halo_memb_temp.keys()])
-    for hid in tqdm(members_keys, ncols=100, colour='blue',
-                    desc='Reversing dicts'):
-        for i, sub_hid in enumerate([*halo_memb_temp[hid]['OHID']]):
-            members_rev[sub_hid].append(hid)
-            dph_rev[sub_hid].append(halo_memb_temp[hid]['dph'][i])
-
-    # Look for repeated members
-    repeated_members = []
-    for sub_hid, elements in members_rev.items():
-        if len(elements) > 1:
-            repeated_members.append(sub_hid)
-
-    # Create a dictionary with the objects marked for removal per halo. HID: PID
-    sub_hids_to_remove = defaultdict(list)
-    for sub_hid in repeated_members:
-        current_sub_hid = np.array(members_rev[sub_hid])
-        current_dph = np.array(dph_rev[sub_hid])
-        loc_min = np.argmin(current_dph)
-        mask_remove = current_dph != current_dph[loc_min]
-
-        for hid in current_sub_hid[mask_remove]:
-            sub_hids_to_remove[hid].append(sub_hid)
-
-    # Create a new members catalogue.
-    halo_memb = {}
-    sub_hids_to_remove_keys = np.array([item for item in sub_hids_to_remove.keys()])
-    for hid in tqdm(members_keys, ncols=100, colour='blue',
-                    desc='Cleaning members'):
-        # If HID has members maked for removal
-        if hid in sub_hids_to_remove_keys:
-            pid_remove = sub_hids_to_remove[hid]
-            mask_keep = np.isin(
-                halo_memb_temp[hid]['OHID'],
-                pid_remove,
-                assume_unique=True,
-                invert=True
-            )
-            # If there are no members left move to the next item.
-            if mask_keep.sum() == 0:
-                continue
-
-            halo_memb[hid] = {
-                'OHID': halo_memb_temp[hid]['OHID'][mask_keep],
-            }
-        # If no members marked for removal, simply copy
-        else:
-            halo_memb[hid] = {
-                'OHID': halo_memb_temp[hid]['OHID'],
-            }
-
-    # ==========================================================================
-    #                               Parent halo IDs
-    # ==========================================================================
-    # Load parent candidates
-    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
-        ohids = hdf['OHID'][()]
-    pids = np.full(ohids.shape[0], fill_value=-1, dtype=np.int32)
-    
-    # Set the parent halo ID for all members.
-    for hid, value in tqdm(halo_memb.items(), ncols=100, colour='green',
-                           desc='Tagging parents'):
-        mask = np.isin(ohids, value['OHID'], assume_unique=True)
-        pids[mask] = hid
-
-    # Save results
-    with h5.File(save_path + f'run_{dir_name}/temp_pids.hdf5', 'w') as hdf:
-        hdf.create_dataset('PID', data=pids)
-    
-    return None
-
-
-@timer
-def percolate_particles(
-    save_path: str,
-    min_num_part: int,
-    part_mass: float,
     dir_name: str,
 ) -> None:
     """_summary_
 
     Parameters
     ----------
-    path : str
-        Location from where to load the file
-    min_num_part : int
-        Minimum number of particles needed to be considered a halo
-    part_mass : float
-        Mass per particle
+    file_seeds : str
+        _description_
+    save_path : str
+        _description_
     dir_name : str
-        Label for the current run. The directory created will be `run_dir_name`.
-
-    Returns
-    -------
-    None
+        _description_
     """
-    # Load parent haloes
-    with h5.File(save_path + f'run_{dir_name}/temp_pids.hdf5', 'r') as hdf:
-        ohids_pids = hdf['PID'][()]
-    mask_parents = ohids_pids == -1
-
-    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
-        ohids = hdf['OHID'][()]
-    ohids = ohids[mask_parents]
-
-    # Load members
-    halo_memb_temp = {}
-    with h5.File(save_path + f'run_{dir_name}/temp_members_part.hdf5', 'r') as hdf:
-        file_keys = list(hdf.keys())
-        for key in tqdm(file_keys, ncols=100, colour='blue',
-                        desc='Loading members'):
-            # Only load members of parent haloes.
-            if int(key) in ohids:
-                halo_memb_temp[int(key)] = {
-                    'PID': hdf[key]['PID'][()],
-                    'dph': hdf[key]['dph'][()],
-                    'row_idx': hdf[key]['row_idx'][()],
-                }
-    
     # ==========================================================================
-    #                                   Step 1
-    # 
-    #   Particles may orbit at most one halo.
-    # 
+    # Load M200b of new haloes from the seed catalogue.
     # ==========================================================================
-    # By definition, any one particle may only orbit a single halo at a time.
-    # Because the orbiting classification of a particle occurs irrespective of 
-    # any previous associations, it can happen that a single particle is orbiting 
-    # more than one halo at a time (multiple membership). We keep membership to 
-    # the closest parent.
-    # ==========================================================================
-    # Reverse the members dictionary. PID: HID and PID: dph
-    members_rev = defaultdict(list)
-    dph_rev = defaultdict(list)
+    with h5.File(file_seeds, 'r') as hdf:
+        ohids_m200b = hdf['Orig_halo_ID'][()]
+        m200b = hdf['M200b'][()]
+    # Sort by HID
+    ohids_order = np.argsort(ohids_m200b)
+    ohids_m200b = ohids_m200b[ohids_order]
+    m200b = m200b[ohids_order]
 
-    members_keys = np.array([item for item in halo_memb_temp.keys()])
-    for hid in tqdm(members_keys, ncols=100, colour='blue',
-                    desc='Reversing dicts'):
-        for i, sub_hid in enumerate([*halo_memb_temp[hid]['PID']]):
-            members_rev[sub_hid].append(hid)
-            dph_rev[sub_hid].append(halo_memb_temp[hid]['dph'][i])
-
-    # Look for repeated members
-    repeated_members = []
-    for sub_hid, elements in members_rev.items():
-        if len(elements) > 1:
-            repeated_members.append(sub_hid)
-
-    # Create a dictionary with the objects marked for removal per halo. HID: PID
-    pids_to_remove = defaultdict(list)
-    for pid in repeated_members:
-        current_pid = np.array(members_rev[pid])
-        current_dph = np.array(dph_rev[pid])
-        loc_min = np.argmin(current_dph)
-        mask_remove = current_dph != current_dph[loc_min]
-
-        for hid in current_pid[mask_remove]:
-            pids_to_remove[hid].append(pid)
-
-    # Create a new members and non-members catalogues
-    halo_memb = {}
-    halo_non_memb = {}
-    removed_haloes = []
-    pids_to_remove_keys = np.array([item for item in pids_to_remove.keys()])
-    for hid in tqdm(members_keys, ncols=100, colour='blue',
-                    desc='Cleaning members'):
-        # If HID has members maked for removal
-        if hid in pids_to_remove_keys:
-            pid_remove = pids_to_remove[int(hid)]
-            mask_keep = np.isin(
-                halo_memb_temp[hid]['PID'],
-                pid_remove,
-                assume_unique=True,
-                invert=True,
-            )
-            
-            # If it no longer has the minimum mass to be considered a halo
-            if mask_keep.sum() < min_num_part:
-                removed_haloes.append(hid)
-
-            halo_memb[hid] = {
-                'PID': halo_memb_temp[hid]['PID'][mask_keep],
-                'row_idx': halo_memb_temp[hid]['row_idx'][mask_keep],
-            }
-            # Removed members are now non-members
-            halo_non_memb[hid] = halo_memb_temp[hid]['row_idx'][~mask_keep]
-        # If no members marked for removal, simply copy
-        else:
-            halo_memb[hid] = {
-                'PID': halo_memb_temp[hid]['PID'],
-                'row_idx': halo_memb_temp[hid]['row_idx'],
-            }
-
-    # ==========================================================================
-    #                                   Step 2
-    # 
-    #   Mass recomputation
-    # 
-    # ==========================================================================
-    # Now that the parents have been percolated, the orbiting mass has changed
-    # and needs to be recomputed.
-    # ==========================================================================
-    # Load raw data to keep same ordering
-    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
-        ohids = hdf['OHID'][()]
-        morb_new = hdf['Morb'][()]
-    
-    members_keys = np.array([item for item in halo_memb.keys()])
-    for i, hid in enumerate(tqdm(ohids, ncols=100, colour='green',
-                            desc='Computing Morb')):
-        # Skip if object is no longer a halo or is not a parent
-        if hid in removed_haloes or hid not in members_keys:
-            continue
-        # Compute the orbiting mass otherwise.
-        morb_new[i] = part_mass * len(halo_memb[hid]['PID'])
-
-    # ==========================================================================
-    #                               Save results
-    # ==========================================================================
-    # Create new halo catalogue with the remaining haloes and subs (as long as 
-    # Morb > 0)
-    mask_morb = (morb_new > 0) & np.isin(ohids, removed_haloes, invert=True)
-
-    with h5.File(save_path + f'run_{dir_name}/temp_pids.hdf5', 'r') as hdf:
-        ohids_pids = hdf['PID'][()]
-    mask_parents = ohids_pids == -1
-    
-    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf_raw, \
-        h5.File(save_path + f'run_{dir_name}/catalogue.hdf5', 'w') as hdf:
-        for key in hdf_raw.keys():
-            hdf.create_dataset(key, data=hdf_raw[key][mask_morb])
-        hdf.create_dataset('Morb_perc', data=morb_new[mask_morb])
-        hdf.create_dataset('PID', data=ohids_pids[mask_morb])
-    
-    # Create members catalogue for parent haloes only.
-    with h5.File(save_path + f'run_{dir_name}/members.hdf5', 'w') as hdf:
-        # Only save members of parent haloes.
-        for hid in tqdm(ohids[mask_morb & mask_parents], ncols=100, colour='green',
-                        desc='Saving members'):
-            hdf.create_dataset(f'{hid}/PID', data=halo_memb[hid]['PID'])
-            hdf.create_dataset(f'{hid}/row_idx', data=halo_memb[hid]['row_idx'])
-
-    # Non members catalogue
-    # with h5.File(path + f'run_{dir_name}/non_members.hdf5', 'w') as hdf:
-    #     pass
-
-    return None
-
-
-@timer
-def percolate_most_massive(
-    save_path: str,
-    min_num_part: int,
-    part_mass: float,
-    dir_name: str,
-) -> None:
-    # \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-    # //////////////////////////////////////////////////////////////////////////
-    # 
-    #                           Percolate Particles
-    # 
-    # \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-    # //////////////////////////////////////////////////////////////////////////
     # Load parent candidates
     with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
-        ohids = hdf['OHID'][()]
-        morb = hdf['Morb'][()]
+        ohids_morb = hdf['Orig_halo_ID'][()]
+        slidx = hdf['SLIDX'][()]
+        suidx = hdf['SUIDX'][()]
+    
+    # Sort by HID
+    ohids_order = np.argsort(ohids_morb)
+    ohids_morb = ohids_morb[ohids_order]
+    slidx = slidx[ohids_order]
+    suidx = suidx[ohids_order]
 
-    # Load members
-    halo_memb_temp = {}
-    halo_non_memb_temp = {}
-    with h5.File(save_path + f'run_{dir_name}/temp_members_part.hdf5', 'r') as hdf:
-        file_keys = list(hdf.keys())
-        for key in tqdm(file_keys, ncols=100, colour='blue', desc='Loading members'):
-            # Only load members of parent haloes.
-            # NOTE: we do not care about the distance `dph` because all shared
-            # particles are always assigned to the most massive parent.
-            if int(key) in ohids:
-                halo_memb_temp[int(key)] = {
-                    'PID': hdf[key]['PID'][()],
-                    'row_idx': hdf[key]['row_idx'][()],
-                }
-                halo_non_memb_temp[int(key)] = \
-                    hdf[key]['row_idx_inf'][()]
+    # Cross-match catalogues making them element-wise compatible.
+    mask_match_catalogues = np.isin(ohids_m200b, ohids_morb, assume_unique=True)
+    m200b = m200b[mask_match_catalogues]
     
     # ==========================================================================
-    #                                   Step 1
-    # 
-    #   Particles may orbit at most one halo.
-    #   Particles orbit the most massive structure
-    # 
+    # Prepare subhaloes for percolation.
     # ==========================================================================
-    # By definition, any one particle may only orbit a single halo at a time.
-    # Because the orbiting classification of a particle occurs irrespective of 
-    # any previous associations, it can happen that a single particle is orbiting 
-    # more than one halo at a time (multiple membership). We keep membership to 
-    # the most massive structure.
-    # ==========================================================================
-    # Reverse the members dictionary. PID: HID and PID: dph
-    members_rev = defaultdict(list)
-    members_keys = np.array([item for item in halo_memb_temp.keys()])
-    for hid in tqdm(members_keys, ncols=100, colour='blue',
-                    desc='Reversing dicts'):
-        for sub_hid in [*halo_memb_temp[hid]['PID']]:
-            members_rev[sub_hid].append(hid)
+    # Load subhalo IDs. Convert to signed integers.
+    with h5.File(save_path + f'run_{dir_name}/temp_members.hdf5', 'r') as hdf:
+        ohids_subs = hdf['subs/Orig_halo_ID'][()].astype(np.int64)
 
-    # Look for repeated members
-    repeated_members = []
-    for sub_hid, elements in members_rev.items():
-        if len(elements) > 1:
-            repeated_members.append(sub_hid)
+    # Rank order haloes by mass (Rockstar)
+    mass_order = np.argsort(m200b)[::-1]
+    ohids = ohids_morb[mass_order]
+    m200b = m200b[mass_order]
+    slidx = slidx[mass_order]
+    suidx = suidx[mass_order]
 
-    # Create a dictionary with the objects marked for removal per halo. HID: PID
-    pids_to_remove = defaultdict(list)
-    for pid in tqdm(repeated_members, ncols=100, colour='blue', 
-                    desc='Checking repetitions'):
-        current_pid = np.array(members_rev[pid])
-        mask_ohids = np.isin(ohids, current_pid)
-        ohid_max = ohids[mask_ohids][np.argmax(morb[mask_ohids])]
-        mask_remove = current_pid != ohid_max
-
-        for hid in current_pid[mask_remove]:
-            pids_to_remove[hid].append(pid)
-
-    # Create a new members and non-members catalogues
-    halo_memb = {}
-    halo_non_memb = {}
-    removed_haloes = []
-    pids_to_remove_keys = np.array([item for item in pids_to_remove.keys()])
-    for hid in tqdm(members_keys, ncols=100, colour='blue',
-                    desc='Cleaning members'):
-        # If HID has members maked for removal
-        if hid in pids_to_remove_keys:
-            pid_remove = pids_to_remove[int(hid)]
-            mask_keep = np.isin(
-                halo_memb_temp[hid]['PID'],
-                pid_remove,
-                assume_unique=True,
-                invert=True,
-            )
-            
-            # If it no longer has the minimum mass to be considered a halo
-            if mask_keep.sum() < min_num_part:
-                removed_haloes.append(hid)
-
-            halo_memb[hid] = {
-                'PID': halo_memb_temp[hid]['PID'][mask_keep],
-                'row_idx': halo_memb_temp[hid]['row_idx'][mask_keep],
-            }
-            # Removed members are now non-members
-            halo_non_memb[hid] = np.sort(
-                np.concatenate(
-                    [
-                        halo_non_memb_temp[hid], 
-                        halo_memb_temp[hid]['row_idx'][~mask_keep]
-                    ]
-                )
-            )
-            
-        # If no members marked for removal, simply copy all items
-        else:
-            halo_memb[hid] = halo_memb_temp[hid]
-            halo_non_memb[hid] = halo_non_memb_temp[hid]
-
-    # ==========================================================================
-    #                                   Step 2
-    # 
-    #   Mass recomputation
-    # 
-    # ==========================================================================
-    # Now that the parents have been percolated, the orbiting mass has changed
-    # and needs to be recomputed.
-    # ==========================================================================
-    morb_new = np.zeros_like(morb)
-
-    members_keys = np.array([item for item in halo_memb.keys()])
-    for i, hid in enumerate(tqdm(ohids, ncols=100, colour='green',
-                            desc='Computing Morb')):
-        # Set mass to zero if object is no longer a halo or is not a parent
-        if (hid in removed_haloes) or (hid not in members_keys):
-            continue
-        # Compute the orbiting mass otherwise.
-        else:
-            # print(i, morb_new[i])
-            # print(part_mass)
-            # print(halo_memb[hid])
-            # print(halo_memb[hid]['PID'])
-            # print(len(halo_memb[hid]['PID']))
-            morb_new[i] = part_mass * len(halo_memb[hid]['PID'])
-
-    # ==========================================================================
-    #                               Save results
-    # ==========================================================================
-    # Create new halo catalogue with the remaining haloes and subs (as long as 
-    # Morb > 0)
-    mask_morb = (morb_new > 0) & np.isin(ohids, removed_haloes, invert=True)
-
-    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf_raw, \
-        h5.File(save_path + f'run_{dir_name}/temp_catalogue_perc.hdf5', 'w') as hdf:
-        for key in hdf_raw.keys():
-            hdf.create_dataset(key, data=hdf_raw[f'{key}'][mask_morb])
-        hdf.create_dataset('Morb_perc', data=morb_new[mask_morb])
-    
-    # Create members catalogue for parent haloes only.
-    with h5.File(save_path + f'run_{dir_name}/members.hdf5', 'w') as hdf:
-        # Only save members of parent haloes.
-        for hid in tqdm(ohids[mask_morb], ncols=100, 
-                        colour='green', desc='Saving members'):
-            hdf.create_dataset(f'{hid}/PID', data=halo_memb[hid]['PID'])
-            hdf.create_dataset(f'{hid}/row_idx', data=halo_memb[hid]['row_idx'])
-            hdf.create_dataset(f'{hid}/row_idx_inf', data=halo_non_memb[hid])
-
-    # \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-    # //////////////////////////////////////////////////////////////////////////
-    # 
-    #                           Percolate Haloes
-    # 
-    # \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
-    # //////////////////////////////////////////////////////////////////////////
-    # Load parent candidates
-    with h5.File(save_path + f'run_{dir_name}/temp_catalogue_perc.hdf5', 'r') as hdf:
-        ohids = hdf['OHID'][()]
-        morb = hdf['Morb_perc'][()]
-        # Rank order haloes by mass
-        morb_order = np.argsort(morb)[::-1]
-    morb = morb[morb_order]
-    ohids = ohids[morb_order]
-
-    # Load members
-    halo_memb = {}
-    with h5.File(save_path + f'run_{dir_name}/temp_members_halo.hdf5', 'r') as hdf:
-        for key in tqdm(hdf.keys(), ncols=100, colour='blue',
-                        desc='Loading members'):
-            halo_memb[int(key)] = hdf[key]['OHID'][()]
-    
-    # Select hales with members only
-    members_keys = np.array([item for item in halo_memb.keys()])
-    mask_with_subs = np.isin(ohids, members_keys, assume_unique=True)
+    # Select all haloes with members. SIDX=-1 if there are no subhaloes.
+    mask_with_subs = (slidx != -1) & (suidx != -1)
     ohids_with_subs = ohids[mask_with_subs]
+    m200b_with_subs = m200b[mask_with_subs]
+    slidx_with_subs = slidx[mask_with_subs]
+    suidx_with_subs = suidx[mask_with_subs]
+
+    # Populate arrays with parent halo ids and parent mass for each subhalo.
+    parent_ohid = np.zeros_like(ohids_subs)
+    parent_mass = np.zeros(ohids_subs.shape, dtype=np.dtype(m200b[0]))
+
+    for i in tqdm(range(len(ohids_with_subs)), ncols=100, colour='blue',
+                    desc='Populating parent mass'):
+        parent_ohid[slidx_with_subs[i]:suidx_with_subs[i]] = ohids_with_subs[i]
+        parent_mass[slidx_with_subs[i]:suidx_with_subs[i]] = m200b_with_subs[i]
 
     # ==========================================================================
     #                                   Step 1
@@ -1013,29 +570,33 @@ def percolate_most_massive(
     # we rank order all haloes, and remove all orbiting haloes that are more
     # massive than the halo itself.
     # ==========================================================================
-    halo_memb_temp = {}
-    # Skip over first item
-    for i in tqdm(range(1, len(ohids_with_subs)), ncols=100,
-                  colour='blue', desc='Establishing hierarchy'): 
-        ohid_current = ohids_with_subs[i]
-        members_current = halo_memb[ohid_current]
-        
-        # More massive HIDs
-        ohid_massive = ohids_with_subs[:i]
-        # Does the current halo has any more massive member?
-        mask_is_more_massive = np.isin(members_current, ohid_massive)
-        # If so, select only those members with smaller mass.
-        if mask_is_more_massive.sum() != 0:
-            mask_is_less_massive = np.isin(members_current, ohid_massive, 
-                                           invert=True)
-        # If all members are less massive, select all members and keep them.
-        else:
-            mask_is_less_massive = np.full(members_current.shape[0], True)
-
-        # If there are any members left, save them into a new dictionary
-        if mask_is_less_massive.sum() != 0:
-            halo_memb_temp[ohid_current] = members_current[mask_is_less_massive]
+    # Find unique subhaloes. Since not all subhaloes have an orbiting mass, 
+    # select only those found in the generated catalogue of candidate haloes.
+    ohids_subs_unique, counts_unique = np.unique(ohids_subs, return_counts=True)
+    mask_has_mass = np.isin(ohids_subs_unique, ohids)
+    ohids_subs_unique = ohids_subs_unique[mask_has_mass]
+    counts_unique = counts_unique[mask_has_mass]
     
+    # Set the mass of all subhaloes. Notice how subhaloes without assigned Morb 
+    # mass will have set M200b=0. Even though M200b is used to rank haloes, the
+    # fact that the seeds have no orbiting mass assigned means they did not pass
+    # the minimum mass threshold in the classifier and must be treated as such.
+    m200b_subs = np.zeros(ohids_subs.shape, dtype=np.dtype(m200b[0]))
+    for item in tqdm(ohids_subs_unique, ncols=100, colour='blue', 
+                    desc='Populating subhalo mass'):
+        m200b_subs[(ohids_subs == item)] = m200b[(ohids==item)]
+    
+    # Compare parent to subhalo mass. Using argmax will return 
+    #                               = 0 if M_parent > M_sub
+    #   argmax(Mparent, Msub) ->    > 0 if M_sub > M_parent
+    # 
+    # Select all cases where argmax(Mparent, Msub) > 0, i.e. where a subhalo is
+    # tagged as orbiting a less massive structure
+    sub_is_massive = np.argmax([parent_mass, m200b_subs], axis=0) > 0
+    # For all 'subhaloes' with larger mass than their parents, set the subhalo 
+    # ID to -1. This effectively removes the ID of a more massive member.
+    ohids_subs[sub_is_massive] = -1
+
     # ==========================================================================
     #                                   Step 2
     # 
@@ -1049,108 +610,244 @@ def percolate_most_massive(
     # and keep membership to the closest parent, thus removing membership from 
     # all others.
     # ==========================================================================
-    # Reverse the members dictionary. PID: HID and PID: dph
-    members_rev = defaultdict(list)
+    # Get unique sub-haloes again to remove all unassigned by previous step
+    ohids_subs_unique, counts_unique = np.unique(ohids_subs, return_counts=True)
+    # Ensure selected subhaloes have an assigned mass.
+    mask_has_mass = np.isin(ohids_subs_unique, ohids) & (ohids_subs_unique != -1)
+    ohids_subs_unique = ohids_subs_unique[mask_has_mass]
+    counts_unique = counts_unique[mask_has_mass]
 
-    members_keys = np.array([item for item in halo_memb_temp.keys()])
-    for hid in tqdm(members_keys, ncols=100, colour='blue',
-                    desc='Reversing dicts'):
-        for sub_hid in [*halo_memb_temp[hid]]:
-            members_rev[sub_hid].append(hid)
+    for item in tqdm(ohids_subs_unique[counts_unique > 1], ncols=100,
+                    colour='blue', desc='Cleaning repetitions'):
+        mask_this = np.isin(ohids_subs, item)
+        # This diference is only zero for the largest parent mass, and its less
+        # than zero for all others.
+        mask_max = (parent_mass - np.max(parent_mass[mask_this])) < 0
+        ohids_subs[mask_this & mask_max] = -1
 
-    # Look for repeated members
-    repeated_members = []
-    for sub_hid, elements in members_rev.items():
-        if len(elements) > 1:
-            repeated_members.append(sub_hid)
+    # ==========================================================================
+    #                             Create new catalogue
+    # ==========================================================================
+    # Load data again to ensure PIDs has the same ordering as the catalogue.
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
+        ohids = hdf['Orig_halo_ID'][()]
+        slidx = hdf['SLIDX'][()]
+        suidx = hdf['SUIDX'][()]
+    
+    # Select all haloes with members. SIDX=-1 if there are no subhaloes.
+    mask_with_subs = (slidx != -1) & (suidx != -1)
+    ohids_with_subs = ohids[mask_with_subs]
+    slidx_with_subs = slidx[mask_with_subs]
+    suidx_with_subs = suidx[mask_with_subs]
 
-    # Create a dictionary with the objects marked for removal per halo. HID: PID
-    sub_hids_to_remove = defaultdict(list)
-    for sub_hid in tqdm(repeated_members, ncols=100, colour='blue', 
-                    desc='Checking repetitions'):
-        current_sub_hid = np.array(members_rev[sub_hid])
-        mask_ohids = np.isin(ohids, current_sub_hid)
-        ohid_max = ohids[mask_ohids][np.argmax(morb[mask_ohids])]
-        mask_remove = current_sub_hid != ohid_max
+    # Generate parent halo ID list.
+    pids = np.full(ohids.shape[0], fill_value=-1, dtype=np.int32)
+    for i, hid in enumerate(tqdm(ohids_with_subs, ncols=100, colour='green',
+                            desc='Establishing halo hierarchy')):
+        subs_ids = ohids_subs[slidx_with_subs[i]:suidx_with_subs[i]]
+        mask_subs = np.isin(ohids, subs_ids[subs_ids != -1], assume_unique=True)
+        pids[mask_subs] = hid
 
-        for hid in current_sub_hid[mask_remove]:
-            sub_hids_to_remove[hid].append(sub_hid)
+    # Save results
+    with h5.File(save_path + f'run_{dir_name}/temp_pids.hdf5', 'w') as hdf:
+        hdf.create_dataset('PID', data=pids)
 
-    # Create a new members catalogue.
-    halo_memb = {}
-    sub_hids_to_remove_keys = np.array([item for item in sub_hids_to_remove.keys()])
-    for hid in tqdm(members_keys, ncols=100, colour='blue', desc='Cleaning members'):
-        # If HID has members maked for removal
-        if hid in sub_hids_to_remove_keys:
-            pid_remove = sub_hids_to_remove[hid]
-            mask_keep = np.isin(
-                halo_memb_temp[hid],
-                pid_remove,
-                assume_unique=True,
-                invert=True
-            )
-            # If there are no members left move to the next item.
-            if mask_keep.sum() == 0:
-                continue
+    return None
 
-            halo_memb[hid] = halo_memb_temp[hid][mask_keep]
-        # If no members marked for removal, simply copy
-        else:
-            halo_memb[hid] = halo_memb_temp[hid]
+
+@timer
+def percolate_particles(
+    file_seeds: str,
+    min_num_part: int,
+    save_path: str,
+    dir_name: str,
+) -> None:
+    # ==========================================================================
+    # Load M200b of new haloes from the seed catalogue.
+    # ==========================================================================
+    with h5.File(file_seeds, 'r') as hdf:
+        ohids_m200b = hdf['Orig_halo_ID'][()]
+        m200b = hdf['M200b'][()]
+    # Sort by HID
+    ohids_order = np.argsort(ohids_m200b)
+    ohids_m200b = ohids_m200b[ohids_order]
+    m200b = m200b[ohids_order]
 
     # Load parent candidates
-    with h5.File(save_path + f'run_{dir_name}/temp_catalogue_perc.hdf5', 'r') as hdf:
-        ohids = hdf['OHID'][()]
-    pids = np.full(ohids.shape[0], fill_value=-1, dtype=np.int32)
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
+        ohids_morb = hdf['Orig_halo_ID'][()]
+        # norb = hdf['Norb'][()]
+        lidx = hdf['LIDX'][()]
+        uidx = hdf['UIDX'][()]
     
-    # Set the parent halo ID for all members.
-    for hid, value in tqdm(halo_memb.items(), ncols=100, colour='green',
-                           desc='Tagging parents'):
-        mask = np.isin(ohids, value, assume_unique=True)
-        pids[mask] = hid
+    # Select parent haloes only
+    with h5.File(save_path + f'run_{dir_name}/temp_pids.hdf5', 'r') as hdf:
+        mask_parents = hdf['PID'][()] == -1
+    
+    # Sort by HID
+    ohids_order = np.argsort(ohids_morb[mask_parents])
+    ohids_morb = ohids_morb[mask_parents][ohids_order]
+    # norb = norb[mask_parents][ohids_order]
+    lidx = lidx[mask_parents][ohids_order]
+    uidx = uidx[mask_parents][ohids_order]
+
+    # Cross-match catalogues making them element-wise compatible.
+    mask_match_catalogues = np.isin(ohids_m200b, ohids_morb, assume_unique=True)
+    m200b = m200b[mask_match_catalogues]
 
     # ==========================================================================
-    #                               Save results
+    # Prepare particles for percolation.
     # ==========================================================================
-    with h5.File(save_path + f'run_{dir_name}/temp_catalogue_perc.hdf5', 'r') as hdf_raw, \
-        h5.File(save_path + f'run_{dir_name}/catalogue.hdf5', 'w') as hdf:
-        for key in hdf_raw.keys():
-            hdf.create_dataset(key, data=hdf_raw[f'{key}'])
-        hdf.create_dataset('PID', data=pids)
-    
-    return
+    # Load particle IDs. Convert to signed integers.
+    with h5.File(save_path + f'run_{dir_name}/temp_members.hdf5', 'r') as hdf:
+        pids = hdf['part/PID'][()].astype(np.int64)
+
+    # Rank order haloes by mass (Rockstar)
+    mass_order = np.argsort(m200b)[::-1]
+    ohids = ohids_morb[mass_order]
+    m200b = m200b[mass_order]
+    # norb = norb[mass_order]
+    lidx = lidx[mass_order]
+    uidx = uidx[mass_order]
+    n_haloes = len(ohids)
+
+    # ==========================================================================
+    #                                   Step 1
+    # 
+    #   Objects may orbit at most one structure.
+    # 
+    # ==========================================================================
+    # By definition, any one object may only orbit a single structure at a time.
+    # Because the orbiting classification of an object occurs irrespective of 
+    # any previous associations, it can happen that a single object is orbiting 
+    # more than one halo at a time (multiple membership). We find all parents 
+    # and keep membership to the closest parent, thus removing membership from 
+    # all others.
+    # ==========================================================================
+    # Create two arrays containing the halo ID and mass.
+    parent_ohid = np.full(pids.shape, -1, dtype=np.int64)
+    parent_mass = np.zeros(pids.shape, dtype=np.dtype(m200b[0]))
+    for i in tqdm(range(n_haloes), ncols=100, colour='blue',
+                  desc='Populating halo mass'):
+        parent_ohid[lidx[i] : uidx[i]] = ohids[i]
+        parent_mass[lidx[i] : uidx[i]] = m200b[i]
+
+    # Get ordering of PIDs and create new sorted arrays.
+    argsort = np.argsort(pids)      # Takes ~1s per 10 million particles
+    pids_sorted = pids[argsort]
+    parent_ohid_sorted = parent_ohid[argsort]
+    parent_mass_sorted = parent_mass[argsort]
+
+    # Get unique PIDs and select those with more than one ocurrence. Only select
+    # particles orbiting a parent halo. This means that their parent_ohid wasn't
+    # changed in the step above. Should help skip duplicated particles which 
+    # have already been percolated via their hosts not being parents.
+    pids_unique, counts_unique = np.unique(pids[parent_ohid !=- 1], 
+                                           return_counts=True)
+    pids_unique = pids_unique[counts_unique > 1]
+    n_unique = len(pids_unique)
+
+    # Since the PIDs are sorted, all repetitions are contiguous now. Find the 
+    # first and last index for each PID.
+    lidx_sorted = np.searchsorted(pids_sorted, pids_unique, side='left')
+    ridx_sorted = np.searchsorted(pids_sorted, pids_unique, side='right')
+
+    # Probably a vectorized way to do this loop...
+    for i in tqdm(range(n_unique), ncols=100, colour='blue', 
+                     desc='Cleaning repetitions'):
+        parent_mass_this = parent_mass_sorted[lidx_sorted[i]:ridx_sorted[i]]
+        # Keep most massive.
+        mask_remove = (parent_mass_this - np.max(parent_mass_this)) < 0
+        # Unassign HID to all toher particles
+        parent_ohid_sorted[lidx_sorted[i]:ridx_sorted[i]][mask_remove] = -1
+
+    # ==========================================================================
+    #                               New halo masses
+    # ==========================================================================
+    # Select only PIDs with assigned HID
+    mask_ohids = parent_ohid_sorted != -1
+    pids_sorted = pids_sorted[mask_ohids]
+    parent_ohid_sorted = parent_ohid_sorted[mask_ohids]
+
+    # Sort arrays now by HID
+    argsort = np.argsort(parent_ohid_sorted)
+    pids_sorted = pids_sorted[argsort]
+    parent_ohid_sorted = parent_ohid_sorted[argsort]
+
+    # Load data again to ensure PIDs has the same ordering as the catalogue.
+    with h5.File(save_path + f'run_{dir_name}/temp_catalogue.hdf5', 'r') as hdf:
+        ohids = hdf['Orig_halo_ID'][()]
+        norb_old = hdf['Orig_halo_ID'][()]
+
+    # New Left and Right indices for member particles.
+    lidx_temp = np.searchsorted(parent_ohid_sorted, ohids, side='left')
+    ridx_temp = np.searchsorted(parent_ohid_sorted, ohids, side='right')
+
+    # Get new orbiting mass
+    norb_new = ridx_temp - lidx_temp
+
+    # Select haloes above minimum mass thresold.
+    mask_new_haloes = norb_new >= min_num_part
+
+    ohids = ohids[mask_new_haloes]
+    norb_new = norb_new[mask_new_haloes]
+    lidx_temp = lidx_temp[mask_new_haloes]
+    ridx_temp = ridx_temp[mask_new_haloes]
+
+    # Select all member particles only for the final haloes
+    pids_new = []
+    lidx_new = np.zeros_like(lidx_temp)
+    ridx_new = np.zeros_like(ridx_temp)
+    norb_sanity = np.zeros_like(norb_new)
+    n_tot = 0
+    for i in tqdm(range(len(ohids)), ncols=100, colour='green', 
+                     desc='Saving particles'):
+        pids_temp = pids_sorted[lidx_temp[i]:ridx_temp[i]]
+        n_parts = len(pids_temp)
+        lidx_new[i] = n_tot
+        ridx_new[i] = n_tot + n_parts
+        norb_sanity[i] = n_parts
+        n_tot += n_parts
+        pids_new.append(pids_temp)
+    pids_new = np.concatenate(pids_new)
+
+    # Save results
+    with h5.File(save_path + f'run_{dir_name}/orbiting_particles.hdf5', 'w') as hdf:
+        hdf.create_dataset('PID', data=pids_new)
+        
+    with h5.File(save_path + f'run_{dir_name}/catalogue.hdf5', 'w') as hdf:
+        hdf.create_dataset('Orig_halo_ID', data=ohids)
+        hdf.create_dataset('Norb', data=norb_new)
+        hdf.create_dataset('LIDX', data=lidx_temp)
+        hdf.create_dataset('UIDX', data=ridx_temp)
+
+    return None
 
 
 @timer
 def generate_catalogue(
     load_path: str,
+    file_seeds: str,
+    dir_name: str,
     min_num_part: int,
-    part_mass: float,
-    rhom: float,
     boxsize: float,
     minisize: float,
-    dir_name: str,
-    delta: Any = 'rockstar',
-    lamb: float = 1.0,
     padding: float = 5.0,
     n_threads: int = None,
 ):
 
     classify_all_mini_boxes(
         load_path=load_path,
+        dir_name=dir_name,
         min_num_part=min_num_part,
-        part_mass=part_mass,
-        rhom=rhom,
         boxsize=boxsize,
         minisize=minisize,
-        dir_name=dir_name,
-        delta=delta,
-        lamb=lamb,
         padding=padding,
         n_threads=n_threads,
     )
 
     percolate_haloes(
+        file_seeds=file_seeds,
         save_path=load_path,
         dir_name=dir_name,
     )
@@ -1158,46 +855,6 @@ def generate_catalogue(
     percolate_particles(
         save_path=load_path,
         min_num_part=min_num_part,
-        part_mass=part_mass,
-        dir_name=dir_name,
-    )
-
-    return None
-
-
-@timer
-def generate_catalogue_most_massive(
-    load_path: str,
-    min_num_part: int,
-    part_mass: float,
-    rhom: float,
-    boxsize: float,
-    minisize: float,
-    dir_name: str,
-    delta: Any = 'rockstar',
-    lamb: float = 1.0,
-    padding: float = 5.0,
-    n_threads: int = None,
-):
-
-    classify_all_mini_boxes(
-        load_path=load_path,
-        min_num_part=min_num_part,
-        part_mass=part_mass,
-        rhom=rhom,
-        boxsize=boxsize,
-        minisize=minisize,
-        dir_name=dir_name,
-        delta=delta,
-        lamb=lamb,
-        padding=padding,
-        n_threads=n_threads,
-    )
-
-    percolate_most_massive(
-        save_path=load_path,
-        min_num_part=min_num_part,
-        part_mass=part_mass,
         dir_name=dir_name,
     )
 

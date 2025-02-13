@@ -475,7 +475,7 @@ def load_particles(
     
     # Probably a better way to create this mask
     mask = (absolute_rel_pos[:, 0] < padded_distance) & \
-        (absolute_rel_pos[:, 1] < padded_distance) & \
+            (absolute_rel_pos[:, 1] < padded_distance) & \
             (absolute_rel_pos[:, 2] < padded_distance)
 
     return pos[mask], vel[mask], pid[mask]
@@ -551,8 +551,7 @@ def load_seeds(
         # Concatenate into a single array
         pos = np.concatenate(pos)
         vel = np.concatenate(vel)
-        pid = np.concatenate(pid)
-        row = np.concatenate(row)
+        hid = np.concatenate(hid)
         r200 = np.concatenate(r200)
         m200 = np.concatenate(m200)
         rs = np.concatenate(rs)
@@ -567,10 +566,10 @@ def load_seeds(
 
         # Probably a better way to create this mask
         mask = (absolute_rel_pos[:, 0] < padded_distance) & \
-        (absolute_rel_pos[:, 1] < padded_distance) & \
-            (absolute_rel_pos[:, 2] < padded_distance)
+                (absolute_rel_pos[:, 1] < padded_distance) & \
+                (absolute_rel_pos[:, 2] < padded_distance)
 
-        return pos[mask], vel[mask], pid[mask], r200[mask], m200[mask], rs[mask]
+        return pos[mask], vel[mask], hid[mask], r200[mask], m200[mask], rs[mask]
 
     else:
         # Load seeds in minibox and exit.
