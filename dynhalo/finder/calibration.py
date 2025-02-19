@@ -57,8 +57,8 @@ def _select_particles_around_haloes(
     # Load seed data
     with h5.File(file_seeds, 'r') as hdf:
         hid = hdf['Orig_halo_ID'][()]
-        r200 = hdf['R200b'][()] / 1000. # Rockstar R200b is given in kpc/h
-        m200 = hdf['M200b'][()]
+        r200b = hdf['R200b'][()] / 1000. # Rockstar R200b is given in kpc/h
+        m200b = hdf['M200b'][()]
 
         pos_seed = np.vstack(
             [
@@ -76,10 +76,10 @@ def _select_particles_around_haloes(
         ).T
 
     # Rank order by mass.
-    order = np.argsort(m200)[::-1]
+    order = np.argsort(-m200b)
     hid = hid[order]
-    r200 = r200[order]
-    m200 = m200[order]
+    r200b = r200b[order]
+    m200b = m200b[order]
     pos_seed = pos_seed[order]
     vel_seed = vel_seed[order]
 
@@ -95,15 +95,13 @@ def _select_particles_around_haloes(
         if i >= len(hid)-1: 
             print(f'Only found {i}/{n_seeds} seeds.')
             break
-        mask_x = np.abs(pos_seed[:, 0] - pos_seed[i, 0]) <= 2.*r200[i]
-        mask_y = np.abs(pos_seed[:, 1] - pos_seed[i, 1]) <= 2.*r200[i]
-        mask_z = np.abs(pos_seed[:, 2] - pos_seed[i, 2]) <= 2.*r200[i]
-        mask_close = mask_x * mask_y * mask_z
-        mask_self = m200 != m200[i]
-        if np.all(m200[mask_close & mask_self] < 0.2 * m200[i]):
+        mask_close = np.prod(np.abs(pos_seed - pos_seed[i]) <=  2.*r200b[i],
+                             axis=1, dtype=bool)
+        mask_self = m200b != m200b[i]
+        if np.all(m200b[mask_close & mask_self] < (0.2 * m200b[i])):
             seed_i.append(i)
         i += 1
-
+        
     hid = hid[seed_i]
     pos_seed = pos_seed[seed_i]
     vel_seed = vel_seed[seed_i]
@@ -135,10 +133,7 @@ def _select_particles_around_haloes(
             rel_pos = relative_coordinates(pos_seed[mask_seeds_in_mini_box][i], 
                                            pos, boxsize)
             # Only work with those close to the seed
-            mask_x = np.abs(rel_pos[:, 0]) <= r_max
-            mask_y = np.abs(rel_pos[:, 1]) <= r_max
-            mask_z = np.abs(rel_pos[:, 2]) <= r_max
-            mask_close = mask_x * mask_y * mask_z
+            mask_close = np.prod(np.abs(rel_pos) <= r_max, axis=1, dtype=bool)
 
             rel_pos = rel_pos[mask_close]
             rel_vel = vel[mask_close] - vel_seed[mask_seeds_in_mini_box][i]
@@ -147,26 +142,21 @@ def _select_particles_around_haloes(
             rps = np.sqrt(np.sum(np.square(rel_pos), axis=1))
             vrp, _, v2p = get_vr_vt_from_coordinates(rel_pos, rel_vel)
 
-            # Compute R200 and M200
+            # Compute R200m and M200m
             rps_prof = rps[np.argsort(rps)]
-            mass_prof = part_mass * (1+np.arange(len(rps))) / \
-                (4 / 3 * np.pi * rps_prof ** 3)
-            rho200_loc = np.argmax(mass_prof <= 200 * rhom)
-            r200 = rps_prof[rho200_loc]
-            m200 = mass_prof[rho200_loc]
+            mass_prof = part_mass * np.arange(1, len(rps_prof)+1)
+            # Find \rho(r) = 200*\rhom
+            rho200_loc = np.argmax(mass_prof / (4 / 3 * np.pi * rps_prof ** 3) <= 200 * rhom)
+            r200m = rps_prof[rho200_loc]
+            m200m = mass_prof[rho200_loc]
 
             # Compute V200
-            v200sq = G_gravity * m200 / r200
+            v200sq = G_gravity * m200m / r200m
             
-            # Resale quantities
-            rps /= r200
-            vrp /= np.sqrt(v200sq)
-            v2p /= v200sq
-
-            # Append to containers
-            r.append(rps)
-            vr.append(vrp)
-            lnv2.append(np.log(v2p))
+            # Append rescaled quantities to containers
+            r.append(rps/r200m)
+            vr.append(vrp/np.sqrt(v200sq))
+            lnv2.append(np.log(v2p/v200sq))
 
     # Concatenate into a single array
     r = np.concatenate(r)
@@ -223,7 +213,7 @@ def get_calibration_data(
         r, vr, lnv2 = _select_particles_around_haloes(
             n_seeds=n_seeds,
             r_max=r_max,
-            box_size=boxsize,
+            boxsize=boxsize,
             minisize=minisize,
             file_seeds=file_seeds,
             save_path=save_path,
