@@ -6,7 +6,8 @@ import numpy as np
 from tqdm import tqdm
 
 from dynhalo.finder.coordinates import relative_coordinates
-from dynhalo.utils import cartesian_product, get_np_unit_dytpe, timer
+from dynhalo.utils import (cartesian_product, gen_data_pos_regular,
+                           get_np_unit_dytpe, timer)
 
 
 def generate_mini_box_grid(
@@ -31,31 +32,23 @@ def generate_mini_box_grid(
     # Number of mini boxes per side
     boxes_per_side = np.int_(np.ceil(boxsize / minisize))
 
-    # Determine data type for integer arrays based on the maximum number of
-    # elements
-    uint_dtype = get_np_unit_dytpe(boxes_per_side)
-    # Set of natural numbers from 0 to N-1
-    n_range = np.arange(boxes_per_side, dtype=uint_dtype)
+    # Sub-box central coordinate. Populate each mini box with one point at the
+    # centre.
+    centres = gen_data_pos_regular(boxsize, minisize)
 
     # Shift in each dimension for numbering mini boxes
     uint_dtype = get_np_unit_dytpe(boxes_per_side**2)
-    shift = np.array(
-        [1, boxes_per_side, boxes_per_side * boxes_per_side], dtype=uint_dtype)
-
-    # Set of index vectors. Each vector points to the (i, j, k)-th mini box
-    n_pos = np.int_(cartesian_product([n_range, n_range, n_range]))
+    shift = np.array([1, boxes_per_side, boxes_per_side**2], dtype=uint_dtype)
 
     # Set of all possible unique IDs for each mini box
-    ids = np.sum(n_pos * shift, axis=1)
+    n = np.arange(boxes_per_side, dtype=uint_dtype)
+    ids = np.sum(np.int_(cartesian_product([n, n, n])) * shift, axis=1)
     sort_order = np.argsort(ids)
 
     # Sort IDs so that the ID matches the row index.
-    n_pos = n_pos[sort_order]
     ids = ids[sort_order]
-
-    # Sub-box central coordinate. Populate each mini box with one point at the
-    # centre.
-    centres = minisize * (n_pos + 0.5)
+    centres = centres[sort_order]
+    
     return ids, centres
 
 
@@ -225,7 +218,7 @@ def split_box_into_mini_boxes(
         Cartesian coordinates
     velocities : np.ndarray
         Cartesian velocities
-    pid : np.ndarray
+    uid : np.ndarray
         Unique IDs for each position (e.g. PID, HID)
     save_path : str
         Where to save the IDs
@@ -443,22 +436,17 @@ def load_particles(
         boxsize=boxsize,
         minisize=minisize
     )
-    n_boxes = len(mini_box_ids)
 
     # Create empty lists (containers) to save the data from file for each ID
-    pos, vel, pid = (
-        [
-            [] for _ in range(n_boxes)
-        ] for _ in range(3)
-    )
+    pos, vel, pid = ([] for _ in range(3))
 
     # Load all adjacent boxes
     for i, mini_box in enumerate(mini_box_ids):
         file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box}.hdf5'
         with h5.File(load_path + file_name, 'r') as hdf:
-            pos[i] = hdf['part/pos'][()]
-            vel[i] = hdf['part/vel'][()]
-            pid[i] = hdf['part/ID'][()]
+            pos.append(hdf['part/pos'][()])
+            vel.append(hdf['part/vel'][()])
+            pid.append(hdf['part/ID'][()])
 
     # Concatenate into a single array
     pos = np.concatenate(pos)
@@ -472,11 +460,7 @@ def load_particles(
     absolute_rel_pos = np.abs(
         relative_coordinates(grid_pos[loc_id], pos, boxsize, periodic=True)
     )
-    
-    # Probably a better way to create this mask
-    mask = (absolute_rel_pos[:, 0] < padded_distance) & \
-            (absolute_rel_pos[:, 1] < padded_distance) & \
-            (absolute_rel_pos[:, 2] < padded_distance)
+    mask = np.prod(absolute_rel_pos <= padded_distance, axis=1, dtype=bool)
 
     return pos[mask], vel[mask], pid[mask]
 
@@ -487,7 +471,6 @@ def load_seeds(
     minisize: float,
     load_path: str,
     padding: float = 5.0,
-    adjacent: bool = False,
 ) -> Tuple[np.ndarray]:
     """Load seeds from a mini box
 
@@ -504,86 +487,85 @@ def load_seeds(
     padding : float
         Only particles up to this distance from the mini box edge are considered 
         for classification. Defaults to 5
-    adjacent : bool
-        If True, returns only de adjacent seeds, by default False
 
     Returns
     -------
     Tuple[np.ndarray]
-        Position, velocity, ID, R200b, M200b and Rs
+        Position, velocity, ID, R200b, M200b, Rs and a mask for seeds in the 
+        minibox.
     """
     # Determine number of partitions per side
     boxes_per_side = np.int_(np.ceil(boxsize / minisize))
 
-    if adjacent:
-        # Generate the IDs and positions of the mini box grid
-        grid_ids, grid_pos = generate_mini_box_grid(boxsize, minisize)
-        # Get the adjacent mini box IDs
-        mini_box_ids = get_adjacent_mini_box_ids(
-            mini_box_id=mini_box_id,
-            mini_box_ids=grid_ids,
-            positions=grid_pos,
-            boxsize=boxsize,
-            minisize=minisize
-        )
-        # Ignore central mini box
-        adj_mini_box_ids = mini_box_ids[mini_box_ids != mini_box_id]
-        n_boxes = len(adj_mini_box_ids)
+    # Generate the IDs and positions of the mini box grid
+    grid_ids, grid_pos = generate_mini_box_grid(boxsize, minisize)
+    
+    # Get the adjacent mini box IDs
+    mini_box_ids = get_adjacent_mini_box_ids(
+        mini_box_id=mini_box_id,
+        mini_box_ids=grid_ids,
+        positions=grid_pos,
+        boxsize=boxsize,
+        minisize=minisize
+    )
 
-        # Create empty lists (containers) to save the data from file for each ID
-        pos, vel, hid, r200, m200, rs = (
-            [
-                [] for _ in range(n_boxes)
-            ] for _ in range(6)
-        )
+    # Create empty lists (containers) to save the data from file for each ID
+    pos, vel, hid, r200, m200, rs, mini_box_mask = ([] for _ in range(7))
 
-        # Load all adjacent boxes
-        for i, mini_box in enumerate(adj_mini_box_ids):
-            file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box}.hdf5'
-            with h5.File(load_path + file_name, 'r') as hdf:
-                pos[i] = hdf['seed/pos'][()]
-                vel[i] = hdf['seed/vel'][()]
-                hid[i] = hdf['seed/ID'][()]
-                r200[i] = hdf['seed/R200b'][()]
-                m200[i] = hdf['seed/M200b'][()]
-                rs[i] = hdf['seed/Rs'][()]
-        
-        # Concatenate into a single array
-        pos = np.concatenate(pos)
-        vel = np.concatenate(vel)
-        hid = np.concatenate(hid)
-        r200 = np.concatenate(r200)
-        m200 = np.concatenate(m200)
-        rs = np.concatenate(rs)
-
-        # Mask seeds within a padding distance of the edge of the box in each
-        # direction
-        loc_id = grid_ids == mini_box_id
-        padded_distance = 0.5 * minisize + padding
-        absolute_rel_pos = np.abs(
-            relative_coordinates(grid_pos[loc_id], pos, boxsize, periodic=True)
-        )
-
-        # Probably a better way to create this mask
-        mask = (absolute_rel_pos[:, 0] < padded_distance) & \
-                (absolute_rel_pos[:, 1] < padded_distance) & \
-                (absolute_rel_pos[:, 2] < padded_distance)
-
-        return pos[mask], vel[mask], hid[mask], r200[mask], m200[mask], rs[mask]
-
-    else:
-        # Load seeds in minibox and exit.
-        file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box_id}.hdf5'
+    # Load all adjacent boxes
+    for i, mini_box in enumerate(mini_box_ids):
+        file_name = f'mini_boxes_nside_{boxes_per_side}/{mini_box}.hdf5'
         with h5.File(load_path + file_name, 'r') as hdf:
-            pos = hdf['seed/pos'][()]
-            vel = hdf['seed/vel'][()]
-            hid = hdf['seed/ID'][()]
-            r200 = hdf['seed/R200b'][()]
-            m200 = hdf['seed/M200b'][()]
-            rs = hdf['seed/Rs'][()]
+            pos.append(hdf['seed/pos'][()])
+            vel.append(hdf['seed/vel'][()])
+            hid.append(hdf['seed/ID'][()])
+            r200.append(hdf['seed/R200b'][()])
+            m200.append(hdf['seed/M200b'][()])
+            rs.append(hdf['seed/Rs'][()])
+            n_seeds = len(hdf['seed/ID'][()])
+            if mini_box == mini_box_id:
+                mini_box_mask.append(np.ones(n_seeds, dtype=bool))
+            else:
+                mini_box_mask.append(np.zeros(n_seeds, dtype=bool))
 
-        return pos, vel, hid, r200, m200, rs
+    # Concatenate into a single array
+    pos = np.concatenate(pos)
+    vel = np.concatenate(vel)
+    hid = np.concatenate(hid)
+    r200 = np.concatenate(r200)
+    m200 = np.concatenate(m200)
+    rs = np.concatenate(rs)
+    mini_box_mask = np.concatenate(mini_box_mask)
 
+    # Mask seeds within a padding distance of the edge of the box in each
+    # direction
+    loc_id = grid_ids == mini_box_id
+    padded_distance = 0.5 * minisize + padding
+    absolute_rel_pos = np.abs(relative_coordinates(
+        grid_pos[loc_id], pos, boxsize, periodic=True,
+    ))
+    mask = np.prod(absolute_rel_pos <= padded_distance, axis=1, dtype=bool)
+
+    m200 = m200[mask]
+    r200 = r200[mask]
+    pos = pos[mask]
+    vel = vel[mask]
+    hid = hid[mask]
+    rs = rs[mask]
+    mini_box_mask = mini_box_mask[mask]
+
+    # Sort seeds by M200 (largest first)
+    argorder = np.argsort(-m200)
+    m200 = m200[argorder]
+    r200 = r200[argorder]
+    pos = pos[argorder]
+    vel = vel[argorder]
+    hid = hid[argorder]
+    rs = rs[argorder]
+    mini_box_mask = mini_box_mask[argorder]
+
+    return (pos, vel, hid, r200, m200, rs, mini_box_mask)
+    
 
 if __name__ == '__main__':
     pass
