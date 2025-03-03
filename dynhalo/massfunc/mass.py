@@ -4,7 +4,7 @@ from typing import List, Tuple, Union
 import numpy as np
 from colossus.cosmology import cosmology as ccosmo
 from colossus.lss import peaks as cpeaks
-from scipy.integrate import simpson
+from scipy.integrate import simps as simpson
 from scipy.interpolate import interp1d
 
 from dynhalo.corrfunc.bins import partition_box
