@@ -70,10 +70,10 @@ def _get_seed_data(
 @timer
 def _select_particles_around_haloes(
     n_seeds: int,
+    seed_data : Tuple,
     r_max: float,
     boxsize: float,
     minisize: float,
-    file_seeds: str,
     save_path: str,
     part_mass: float,
     rhom: float,
@@ -96,8 +96,6 @@ def _select_particles_around_haloes(
         Size of simulation box
     minisize : float
         Size of mini box
-    file_seeds : str
-        File containing the seeds, including path.
     save_path : str
         Path to the mini boxes
     part_mass : float
@@ -112,25 +110,7 @@ def _select_particles_around_haloes(
         in units of R200m and M200m.
     """
     # Load seed data
-    with h5.File(file_seeds, 'r') as hdf:
-        hid = hdf['Orig_halo_ID'][()]
-        r200b = hdf['R200b'][()] / 1000. # Rockstar R200b is given in kpc/h
-        m200b = hdf['M200b'][()]
-
-        pos_seed = np.vstack(
-            [
-                hdf['x'][()],
-                hdf['y'][()],
-                hdf['z'][()],
-            ]
-        ).T
-        vel_seed = np.vstack(
-            [
-                hdf['vx'][()],
-                hdf['vy'][()],
-                hdf['vz'][()],
-            ]
-        ).T
+    hid, r200b, m200b, pos_seed, vel_seed = seed_data
 
     # Rank order by mass.
     order = np.argsort(-m200b)
@@ -217,10 +197,10 @@ def _select_particles_around_haloes(
 
 def get_calibration_data(
     n_seeds: int,
+    seed_data : Tuple,
     r_max: float,
     boxsize: float,
     minisize: float,
-    file_seeds: str,
     save_path: str,
     part_mass: float,
     rhom: float,
@@ -238,8 +218,6 @@ def get_calibration_data(
         Size of simulation box
     minisize : float
         Size of mini box
-    file_seeds : str
-        File containing the seeds, including path.
     save_path : str
         Path to the mini boxes
     part_mass : float
@@ -262,10 +240,10 @@ def get_calibration_data(
     except:
         out = _select_particles_around_haloes(
             n_seeds=n_seeds,
+            seed_data=seed_data,
             r_max=r_max,
             boxsize=boxsize,
             minisize=minisize,
-            file_seeds=file_seeds,
             save_path=save_path,
             part_mass=part_mass,
             rhom=rhom,
@@ -370,10 +348,10 @@ def gradient_minima(
 @timer
 def calibrate_finder(
     n_seeds: int,
+    seed_data : Tuple,
     r_max: float,
     boxsize: float,
     minisize: float,
-    file_seeds: str,
     save_path: str,
     part_mass: float,
     rhom: float,
@@ -395,8 +373,6 @@ def calibrate_finder(
         Size of simulation box
     minisize : float
         Size of mini box
-    file_seeds : str
-        File containing the seeds, including path.
     save_path : str
         Path to the mini boxes
     part_mass : float
@@ -414,10 +390,10 @@ def calibrate_finder(
     """
     r, vr, lnv2 = get_calibration_data(
         n_seeds=n_seeds,
+        seed_data=seed_data,
         r_max=r_max,
         boxsize=boxsize,
         minisize=minisize,
-        file_seeds=file_seeds,
         save_path=save_path,
         part_mass=part_mass,
         rhom=rhom,
