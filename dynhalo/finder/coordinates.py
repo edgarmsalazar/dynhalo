@@ -50,7 +50,8 @@ def get_vr_vt_from_coordinates(
     Returns
     -------
     Tuple[np.ndarray]
-        Radial velocity, tangential velocity and magnitude squared of the velocity
+        Radial velocity, tangential velocity and magnitude squared of the 
+        velocity
     """
     # Transform coordinates from cartesian to spherical
     #   rs = sqrt( x**2 + y**2 + z**2 )
@@ -79,6 +80,29 @@ def get_vr_vt_from_coordinates(
     v2 = np.sum(np.square(vel), axis=1)
 
     return vr, vt, v2
+
+
+def characteristic_density(
+    r200: float,
+    rs: float
+) -> float:
+    """Computes the characteristic density of an NFW profile.
+
+    Parameters
+    ----------
+    r200 : float
+        Halo radius
+    rs : float
+        Scale radius
+
+    Returns
+    -------
+    float
+        Delta characteristic
+    """
+    c200 = r200 / rs
+    delta = ((200./3.) * c200) / (np.log(1 + c200) - (c200 / (1 + c200)))
+    return delta
 
 
 if __name__ == "__main__":

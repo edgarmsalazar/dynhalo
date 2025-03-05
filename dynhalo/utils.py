@@ -3,9 +3,9 @@
 """
 import os
 from dataclasses import dataclass
-from datetime import timedelta, datetime
+from datetime import datetime, timedelta
 from time import time
-from typing import Callable, List
+from typing import Any, Callable, List
 
 import numpy
 
@@ -34,11 +34,34 @@ OKGOOD = f"{COLS.OKGREEN}{COLS.BULLET}{COLS.ENDC} "
 FAIL = f"{COLS.FAIL}{COLS.BULLET}{COLS.ENDC} "
 
 
-def get_np_unit_dytpe(obj):
+def get_np_unit_dytpe(num: Any) -> numpy.dtype:
+    """Determines the minimum unsigned integer type to represent `num`.
+
+    Parameters
+    ----------
+    num : Any
+        Numerical value.
+
+    Returns
+    -------
+    numpy.dtype
+        Numpy data type class.
+
+    Raises
+    ------
+    TypeError
+        If `num` is not an integer or it is a negative value.
+    OverflowError
+        If `num` cannot be represented by any 16, 32 or 64 bit unsigned integer.
+    """
     np_unit_dtypes = numpy.array([numpy.uint16, numpy.uint32, numpy.uint64])
-    loc = numpy.argmax(
-        [obj < numpy.iinfo(item).max for item in np_unit_dtypes])
-    return np_unit_dtypes[loc]
+    check = [num < numpy.iinfo(item).max for item in np_unit_dtypes]
+    if num < 0:
+        raise TypeError
+    if any(check):
+        return np_unit_dtypes[numpy.argmax(check)]
+    else:
+        raise OverflowError
 
 
 def timer(procedure: Callable) -> Callable:
@@ -106,7 +129,7 @@ def mkdir(path: str, verbose: bool = False) -> None:
     return None
 
 
-def cartesian_product(arrays: List[numpy.ndarray]):
+def cartesian_product(arrays: List[numpy.ndarray]) -> numpy.ndarray:
     """Generalized N-dimensional products
     Taken from https://stackoverflow.com/questions/11144513/
     Answer by Nico Schlömer
@@ -130,17 +153,56 @@ def cartesian_product(arrays: List[numpy.ndarray]):
     return arr.reshape(-1, la)
 
 
-def gen_data_pos_regular(boxsize, gridsize) -> numpy.ndarray:
-    # Populate coordinates with one particle per subbox at the centre in steps
-    # of nside between particles
-    nside = numpy.int_(numpy.ceil(boxsize / gridsize))
-    n_range = numpy.arange(nside, dtype=int)
-    n_pos = numpy.int_(cartesian_product([n_range, n_range, n_range]))
-    data_pos = gridsize * (n_pos + 0.5)
-    return data_pos
+def gen_data_pos_regular(boxsize: float, gridsize: float) -> numpy.ndarray:
+    """Populate coordinates with one particle per subbox at the centre in steps
+    of nside between particles.
+
+    Parameters
+    ----------
+    boxsize : float
+        Length of the box.
+    gridsize : float
+        Length of the grid.
+
+    Returns
+    -------
+    numpy.ndarray
+        
+    """
+    # Number of cells per side.
+    n_per_side = numpy.int_(numpy.ceil(boxsize / gridsize))
+    
+    # Determine data type for integer arrays based on the maximum number of
+    # elements.
+    uint_dtype = get_np_unit_dytpe(n_per_side)
+    
+    # Set of natural numbers from 0 to N-1.
+    n_range = numpy.arange(n_per_side, dtype=uint_dtype)
+
+    # Set of index vectors. Each vector points to the (i, j, k)-th cell.
+    pos = numpy.int_(cartesian_product([n_range, n_range, n_range]))
+    centre = gridsize * (pos + 0.5)
+    return centre
 
 
-def gen_data_pos_random(boxsize, nsamples) -> numpy.ndarray:
+def gen_data_pos_random(boxsize: float, nsamples: int, seed=None) -> numpy.ndarray:
+    """Generate random data points inside a cubic box.
+
+    Parameters
+    ----------
+    boxsize : float
+        Length of the box.
+    nsamples : int
+        Number of points to sample.
+    seed : _type_, optional
+        Random gnerator seed, by default None
+
+    Returns
+    -------
+    numpy.ndarray
+
+    """
+    numpy.random.seed(seed=seed)
     data_pos = boxsize * numpy.random.uniform(0, 1, (nsamples, 3))
     return data_pos
 
