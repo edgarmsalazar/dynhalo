@@ -1,4 +1,7 @@
-from typing import Tuple
+import os
+from functools import partial
+from multiprocessing import Pool
+from typing import List, Tuple
 
 import h5py as h5
 import numpy as np
@@ -11,6 +14,59 @@ from dynhalo.finder.minibox import get_mini_box_id, load_particles
 from dynhalo.utils import G_gravity, timer
 
 
+def _get_seed_data(
+    mini_box_id: int,
+    pos_seed: List[np.ndarray],
+    vel_seed: List[np.ndarray],
+    r_max: float,
+    boxsize: float,
+    minisize: float,
+    rhom: float,
+    part_mass: float,
+    save_path: str,
+) -> Tuple[np.ndarray]:
+    # Load particles in minibox.
+    pos, vel, *_ = load_particles(mini_box_id, boxsize, minisize, save_path)
+
+    # Iterate over seeds in current mini box.
+    r, vr, lnv2 = ([] for _ in range(3))
+    for i in range(len(pos_seed)):
+        # Compute the relative positions of all particles in the box
+        rel_pos = relative_coordinates(pos_seed[i], pos, boxsize)
+        # Only work with those close to the seed
+        mask_close = np.prod(np.abs(rel_pos) <= r_max, axis=1, dtype=bool)
+
+        rel_pos = rel_pos[mask_close]
+        rel_vel = vel[mask_close] - vel_seed[i]
+        
+        # Compute radial distance, radial and tangential velocities
+        rps = np.sqrt(np.sum(np.square(rel_pos), axis=1))
+        vrp, _, v2p = get_vr_vt_from_coordinates(rel_pos, rel_vel)
+
+        # Compute R200m and M200m
+        rps_prof = rps[np.argsort(rps)]
+        mass_prof = part_mass * np.arange(1, len(rps_prof)+1)
+        # Find \rho(r) = 200*\rhom
+        rho200_loc = np.argmax(mass_prof / (4 / 3 * np.pi * rps_prof ** 3) \
+                               <= 200 * rhom)
+        r200m = rps_prof[rho200_loc]
+        m200m = mass_prof[rho200_loc]
+
+        # Compute V200
+        v200sq = G_gravity * m200m / r200m
+        
+        # Append rescaled quantities to containers
+        r.append(rps/r200m)
+        vr.append(vrp/np.sqrt(v200sq))
+        lnv2.append(np.log(v2p/v200sq))
+    
+    # Concatenate into a single array
+    r = np.concatenate(r)
+    vr = np.concatenate(vr)
+    lnv2 = np.concatenate(lnv2)
+
+    return np.vstack([r, vr, lnv2])
+
 @timer
 def _select_particles_around_haloes(
     n_seeds: int,
@@ -21,6 +77,7 @@ def _select_particles_around_haloes(
     save_path: str,
     part_mass: float,
     rhom: float,
+    n_threads: int = None,
 ) -> Tuple[np.ndarray]:
     """Locates for the largest `M_200b` seeds and searches for all the particles
     around them up to a distance `r_max`.
@@ -88,8 +145,11 @@ def _select_particles_around_haloes(
     # enforced by requiring that the next most-massive seed within 2*R200 is, at
     # least five times smaller than the seed, i.e. has a mass <= 20% of M200.
     # The loop will stop once it has found `n_seeds` eligible seeds.
+    # NOTE: When using multiple threads, this is the part that takes most of the
+    # execution time and scales with the number of candidate seeds requested.
     seed_i = []
     i = 0
+    print('Looking for candidate seeds...')
     while len(seed_i) < n_seeds:
         # Exit the loop if there are no more seeds in the list.
         if i >= len(hid)-1: 
@@ -101,7 +161,8 @@ def _select_particles_around_haloes(
         if np.all(m200b[mask_close & mask_self] < (0.2 * m200b[i])):
             seed_i.append(i)
         i += 1
-        
+    print(f'Found candidate seeds.')
+
     hid = hid[seed_i]
     pos_seed = pos_seed[seed_i]
     vel_seed = vel_seed[seed_i]
@@ -117,53 +178,41 @@ def _select_particles_around_haloes(
 
     # Get unique mini box ids
     unique_mini_box_ids = np.unique(seed_mini_box_id)
+    n_unique = len(unique_mini_box_ids)
 
-    # Create empty lists (containers) to save the data from file for each ID
-    r, vr, lnv2 = ([] for _ in range(3))
-    # Iterate over mini box IDs
-    # NOTE: Could parallelise this but it is not super slow
-    for mini_box_id in tqdm(unique_mini_box_ids, desc='Processing mini box',
-                        colour='blue', ncols=100):
-        pos, vel, *_ = load_particles(mini_box_id, boxsize, minisize, save_path)
+    pos_unique = [
+        pos_seed[seed_mini_box_id == mini_box_id] 
+        for mini_box_id in unique_mini_box_ids
+    ]
+    vel_unique = [
+        vel_seed[seed_mini_box_id == mini_box_id] 
+        for mini_box_id in unique_mini_box_ids
+    ]
 
-        # Iterate over seeds in current mini box ID
-        mask_seeds_in_mini_box = seed_mini_box_id == mini_box_id
-        for i in range(mask_seeds_in_mini_box.sum()):
-            # Compute the relative positions of all particles in the box
-            rel_pos = relative_coordinates(pos_seed[mask_seeds_in_mini_box][i], 
-                                           pos, boxsize)
-            # Only work with those close to the seed
-            mask_close = np.prod(np.abs(rel_pos) <= r_max, axis=1, dtype=bool)
+    func = partial(_get_seed_data, r_max=r_max, boxsize=boxsize, 
+                   minisize=minisize, rhom=rhom, part_mass=part_mass, 
+                   save_path=save_path)
+    
+    # Cap the number of threads to the total number of miniboxes to process.
+    if not n_threads:
+        n_threads = np.min([os.cpu_count()-10, n_unique])
+    else:
+        n_threads = np.min([n_threads, n_unique])
 
-            rel_pos = rel_pos[mask_close]
-            rel_vel = vel[mask_close] - vel_seed[mask_seeds_in_mini_box][i]
-            
-            # Compute radial distance, radial and tangential velocities
-            rps = np.sqrt(np.sum(np.square(rel_pos), axis=1))
-            vrp, _, v2p = get_vr_vt_from_coordinates(rel_pos, rel_vel)
+    data = zip(unique_mini_box_ids, pos_unique, vel_unique)
+    out = []
+    with Pool(n_threads) as pool, \
+        tqdm(total=n_unique, colour="blue", ncols=100,
+             desc='Processing candidates') as pbar:
+        # The 
+        for res in pool.starmap(func, data):
+            out.append(res)
+            pbar.update()
+            pbar.refresh()
+    out = np.concatenate(out, axis=1).T
 
-            # Compute R200m and M200m
-            rps_prof = rps[np.argsort(rps)]
-            mass_prof = part_mass * np.arange(1, len(rps_prof)+1)
-            # Find \rho(r) = 200*\rhom
-            rho200_loc = np.argmax(mass_prof / (4 / 3 * np.pi * rps_prof ** 3) <= 200 * rhom)
-            r200m = rps_prof[rho200_loc]
-            m200m = mass_prof[rho200_loc]
-
-            # Compute V200
-            v200sq = G_gravity * m200m / r200m
-            
-            # Append rescaled quantities to containers
-            r.append(rps/r200m)
-            vr.append(vrp/np.sqrt(v200sq))
-            lnv2.append(np.log(v2p/v200sq))
-
-    # Concatenate into a single array
-    r = np.concatenate(r)
-    vr = np.concatenate(vr)
-    lnv2 = np.concatenate(lnv2)
-
-    return r, vr, lnv2
+    # Return an array where each column corresponds to r, vr, lnv2 respectively
+    return out
 
 
 def get_calibration_data(
@@ -175,6 +224,7 @@ def get_calibration_data(
     save_path: str,
     part_mass: float,
     rhom: float,
+    n_threads: int = None,
 ) -> Tuple[np.ndarray]:
     """_summary_
 
@@ -210,7 +260,7 @@ def get_calibration_data(
             lnv2 = hdf['lnv2'][()]
         return r, vr, lnv2
     except:
-        r, vr, lnv2 = _select_particles_around_haloes(
+        out = _select_particles_around_haloes(
             n_seeds=n_seeds,
             r_max=r_max,
             boxsize=boxsize,
@@ -219,14 +269,15 @@ def get_calibration_data(
             save_path=save_path,
             part_mass=part_mass,
             rhom=rhom,
+            n_threads=n_threads,
         )
 
         with h5.File(file_name, 'w') as hdf:
-            hdf.create_dataset('r', data=r)
-            hdf.create_dataset('vr', data=vr)
-            hdf.create_dataset('lnv2', data=lnv2)
+            hdf.create_dataset('r', data=out[:, 0])
+            hdf.create_dataset('vr', data=out[:, 1])
+            hdf.create_dataset('lnv2', data=out[:, 2])
 
-        return r, vr, lnv2
+        return out[:, 0], out[:, 1], out[:, 2]
 
 
 def cost_percentile(b: float, *data) -> float:
@@ -327,9 +378,10 @@ def calibrate_finder(
     part_mass: float,
     rhom: float,
     n_points: int = 20,
-    perc: float = 0.98,
+    perc: float = 0.995,
     width: float = 0.05,
     grad_lims: tuple = (0.2, 0.5),
+    n_threads: int = None,
 ):
     """_summary_
 
@@ -368,7 +420,8 @@ def calibrate_finder(
         file_seeds=file_seeds,
         save_path=save_path,
         part_mass=part_mass,
-        rhom=rhom
+        rhom=rhom,
+        n_threads=n_threads,
     )
 
     mask_vr_neg = (vr < 0)
