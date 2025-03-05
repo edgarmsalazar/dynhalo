@@ -140,9 +140,9 @@ def generate_mini_box_ids(
     positions: np.ndarray,
     boxsize: float,
     minisize: float,
-    save_path: str,
+    # save_path: str,
     chunksize: int = 100_000,
-    name: str = None
+    # name: str = None
 ) -> None:
     """Gets the mini box ID for each position
 
@@ -184,18 +184,20 @@ def generate_mini_box_ids(
             upp = None
         ids[low:upp] = get_mini_box_id(positions[low:upp], boxsize, minisize)
 
-    if name:
-        file_name = f'mini_box_id_nside_{boxes_per_side}_{name}.hdf5'
-    else:
-        file_name = f'mini_box_id_nside_{boxes_per_side}.hdf5'
-    with h5.File(save_path + file_name, 'w') as hdf:
-        hdf.create_dataset('MBID', data=ids, dtype=uint_dtype)
+    # if name:
+    #     file_name = f'mini_box_id_nside_{boxes_per_side}_{name}.hdf5'
+    # else:
+    #     file_name = f'mini_box_id_nside_{boxes_per_side}.hdf5'
+    
+    # hdf = h5.File(save_path + file_name, 'w')
+    # hdf.create_dataset('MBID', data=ids, dtype=uint_dtype)
+    # hdf.close()
     
     # Function hangs not closing the file above. This forces to close the file 
     # and continue execution. Not fancy but works.
-    print()
+    # print()
 
-    return None
+    return ids
 
 
 @timer
@@ -247,29 +249,13 @@ def split_box_into_mini_boxes(
     # Determine number of partitions per side
     boxes_per_side = np.int_(np.ceil(boxsize / minisize))
 
-    # Load mini box ids
-    if name:
-        mini_box_ids_file = save_path + \
-            f'mini_box_id_nside_{boxes_per_side}_{name}.hdf5'
-    else:
-        mini_box_ids_file = save_path + \
-            f'mini_box_id_nside_{boxes_per_side}.hdf5'
-    # Load if file already exists
-    try:
-        with h5.File(mini_box_ids_file, 'r') as hdf:
-            mini_box_ids = hdf['MBID'][()]
-    # Create and file otherwise
-    except:
-        generate_mini_box_ids(
-            positions=positions, 
-            boxsize=boxsize, 
-            minisize=minisize,
-            save_path=save_path,
-            chunksize=chunksize,
-            name=name,
-            )
-        with h5.File(mini_box_ids_file, 'r') as hdf:
-            mini_box_ids = hdf['MBID'][()]
+    # Compute mini box ids
+    mini_box_ids = generate_mini_box_ids(
+        positions=positions, 
+        boxsize=boxsize, 
+        minisize=minisize,
+        chunksize=chunksize,
+    )
 
     # Create target directory
     save_dir = save_path + f'mini_boxes_nside_{boxes_per_side}/'
@@ -282,17 +268,11 @@ def split_box_into_mini_boxes(
     # Get smallest data type to represent IDs
     uint_dtype_pid = get_np_unit_dytpe(np.max(uid))
 
-    # Get smallest data type to represent the row index of each item
-    n_items = mini_box_ids.shape[0]
-    uint_dtype_row = get_np_unit_dytpe(n_items)
-    row_idx = np.arange(n_items, dtype=uint_dtype_row)
-    
     # Sort data by mini box id
     mb_order = np.argsort(mini_box_ids)
     mini_box_ids = mini_box_ids[mb_order]
     velocities = velocities[mb_order]
     positions = positions[mb_order]
-    row_idx = row_idx[mb_order]
     uid = uid[mb_order]
 
     if props:
@@ -325,12 +305,11 @@ def split_box_into_mini_boxes(
             break
 
     if props:
-        labels = ('ID', 'pos', 'vel', 'row_idx', *labels)
-        dtypes = (uint_dtype_pid, np.float32, np.float32, uint_dtype_row, 
-                  *dtypes)
+        labels = ('ID', 'pos', 'vel', *labels)
+        dtypes = (uint_dtype_pid, np.float32, np.float32, *dtypes)
     else:
-        labels = ('ID', 'pos', 'vel', 'row_idx')
-        dtypes = (uint_dtype_pid, np.float32, np.float32, uint_dtype_row)
+        labels = ('ID', 'pos', 'vel')
+        dtypes = (uint_dtype_pid, np.float32, np.float32)
 
     # For each chunk
     for chunk_i in tqdm(range(len(chunk_idx)-1), desc='Processing chunks',
@@ -343,7 +322,6 @@ def split_box_into_mini_boxes(
         pos_chunk = positions[low : upp]
         vel_chunk = velocities[low : upp]
         pid_chunk = uid[low : upp]
-        row_chunk = row_idx[low : upp]
 
         if props:
             props_chunks = [None for _ in range(len(props))]
@@ -368,7 +346,6 @@ def split_box_into_mini_boxes(
                     pid_chunk[indexed_slice[i] : indexed_slice[i+1]],
                     pos_chunk[indexed_slice[i] : indexed_slice[i+1]],
                     vel_chunk[indexed_slice[i] : indexed_slice[i+1]],
-                    row_chunk[indexed_slice[i] : indexed_slice[i+1]],
                     *[
                         item_chunk[indexed_slice[i] : indexed_slice[i+1]] \
                             for item_chunk in props_chunks
@@ -379,7 +356,6 @@ def split_box_into_mini_boxes(
                     pid_chunk[indexed_slice[i] : indexed_slice[i+1]],
                     pos_chunk[indexed_slice[i] : indexed_slice[i+1]],
                     vel_chunk[indexed_slice[i] : indexed_slice[i+1]],
-                    row_chunk[indexed_slice[i] : indexed_slice[i+1]],
                 )
                 
             with h5.File(save_dir + f'{mb_id}.hdf5', 'a') as hdf:
