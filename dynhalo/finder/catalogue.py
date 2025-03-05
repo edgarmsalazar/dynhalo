@@ -178,7 +178,7 @@ def classify_single_mini_box(
         m200b = m200b[m200b_mask]
         rs = rs[m200b_mask]
         mask_mb = mask_mb[m200b_mask]
-    else:
+    elif m200b_cut and not part_mass:
         raise ValueError('Particle mass unspecified. Please run again with '+\
                          'part_mass argument specified.')
     
