@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from dynhalo.finder.coordinates import relative_coordinates
 from dynhalo.utils import (cartesian_product, gen_data_pos_regular,
-                           get_np_unit_dytpe, timer)
+                           get_np_unit_dytpe)
 
 
 def generate_mini_box_grid(
@@ -135,7 +135,6 @@ def get_adjacent_mini_box_ids(
     return mini_box_ids[mask]
 
 
-@timer
 def generate_mini_box_ids(
     positions: np.ndarray,
     boxsize: float,
@@ -200,7 +199,6 @@ def generate_mini_box_ids(
     return ids
 
 
-@timer
 def split_box_into_mini_boxes(
     positions: np.ndarray,
     velocities: np.ndarray,
@@ -254,7 +252,7 @@ def split_box_into_mini_boxes(
         positions=positions, 
         boxsize=boxsize, 
         minisize=minisize,
-        chunksize=chunksize,
+        chunksize=np.min([len(positions), chunksize]),
     )
 
     # Create target directory

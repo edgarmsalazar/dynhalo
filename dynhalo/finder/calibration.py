@@ -11,7 +11,7 @@ from tqdm import tqdm
 from dynhalo.finder.coordinates import (get_vr_vt_from_coordinates,
                                         relative_coordinates)
 from dynhalo.finder.minibox import get_mini_box_id, load_particles
-from dynhalo.utils import G_gravity, timer
+from dynhalo.utils import G_gravity
 
 
 def _get_seed_data(
@@ -67,7 +67,7 @@ def _get_seed_data(
 
     return np.vstack([r, vr, lnv2])
 
-@timer
+# @timer
 def _select_particles_around_haloes(
     n_seeds: int,
     seed_data : Tuple,
@@ -345,7 +345,6 @@ def gradient_minima(
     return grad_r, grad_min
 
 
-@timer
 def calibrate_finder(
     n_seeds: int,
     seed_data : Tuple,
