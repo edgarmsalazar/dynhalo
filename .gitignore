@@ -4,9 +4,6 @@
 *.ini
 .pytest_cache
 *__pycache__*
-temp/
-test/img/
-test/data/
-scripts/data/
-scripts/*.ipynb
+build/*
+temp/*
 scripts/*
