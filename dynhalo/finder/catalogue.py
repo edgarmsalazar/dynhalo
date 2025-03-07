@@ -13,7 +13,7 @@ from tqdm import tqdm
 from dynhalo.finder.coordinates import (characteristic_density,
                                         relative_coordinates)
 from dynhalo.finder.minibox import load_particles, load_seeds
-from dynhalo.utils import G_gravity, timer
+from dynhalo.utils import G_gravity
 
 filterwarnings('ignore')
 
@@ -131,8 +131,7 @@ def classify_single_mini_box(
     load_path: str,
     dir_name: str,
     padding: float = 5.0,
-    simple_subs: bool = False,
-    m200b_cut: bool = False,
+    fast_mass: bool = False,
     part_mass: float = None,
     disable_tqdm: bool = True,
 ) -> None:
@@ -168,7 +167,7 @@ def classify_single_mini_box(
     pos_seed, vel_seed, hid, r200b, m200b, rs, mask_mb = \
         load_seeds(mini_box_id, boxsize, minisize, load_path, padding)
     
-    if m200b_cut and part_mass:
+    if fast_mass and part_mass:
         min_mass = 0.5 * min_num_part * part_mass
         m200b_mask = m200b > min_mass
         pos_seed = pos_seed[m200b_mask]
@@ -178,7 +177,7 @@ def classify_single_mini_box(
         m200b = m200b[m200b_mask]
         rs = rs[m200b_mask]
         mask_mb = mask_mb[m200b_mask]
-    elif m200b_cut and not part_mass:
+    elif fast_mass and not part_mass:
         raise ValueError('Particle mass unspecified. Please run again with '+\
                          'part_mass argument specified.')
     
@@ -258,7 +257,7 @@ def classify_single_mini_box(
             deltac_seed_near = deltac[i+1:][mask_seed]
             rs_seed_near = rs[i+1:][mask_seed]
 
-            if simple_subs:
+            if fast_mass:
                 rel_vel_seed = vel_seed - vel_seed[i]
                 mask_orb_sub = classify(rel_pos_seed[i+1:][mask_seed], 
                                         rel_vel_seed[i+1:][mask_seed], r200b[i], 
@@ -438,7 +437,6 @@ def classify_single_mini_box(
     return None
 
 
-@timer
 def classify_all_mini_boxes(
     load_path: str,
     dir_name: str,
@@ -446,8 +444,7 @@ def classify_all_mini_boxes(
     boxsize: float,
     minisize: float,
     padding: float,
-    simple_subs: bool = False,
-    m200b_cut: bool = False,
+    fast_mass: bool = False,
     part_mass: float = None,
     n_threads: int = None,
 ) -> None:
@@ -487,8 +484,8 @@ def classify_all_mini_boxes(
     # Parallel processing of miniboxes.
     func = partial(classify_single_mini_box, min_num_part=min_num_part,
                    boxsize=boxsize, load_path=load_path, minisize=minisize, 
-                   padding=padding, dir_name=dir_name, simple_subs=simple_subs,
-                   m200b_cut=m200b_cut, part_mass=part_mass, disable_tqdm=True)
+                   padding=padding, dir_name=dir_name, fast_mass=fast_mass,
+                   part_mass=part_mass, disable_tqdm=True)
 
     with Pool(n_threads) as pool, \
         tqdm(total=n_mini_boxes, colour="green", ncols=100,
