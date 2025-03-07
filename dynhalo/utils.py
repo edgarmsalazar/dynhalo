@@ -64,7 +64,7 @@ def get_np_unit_dytpe(num: Any) -> numpy.dtype:
         raise OverflowError
 
 
-def timer(procedure: Callable) -> Callable:
+def timer(procedure: Callable, *, fancy=False) -> Callable:
     """Decorator that prints the procedure's execution time
 
     Parameters
@@ -83,15 +83,21 @@ def timer(procedure: Callable) -> Callable:
         start = time()
         return_value = procedure(*args, **kwargs)
         now_end = datetime.now()
-        print(f"\t{COLS.BOLD}Process:{COLS.ENDC} {COLS.FAIL}{procedure.__name__}{COLS.ENDC}")
-        print(f"\t Start:  " + \
-              f"{COLS.HEADER}{now_start.strftime('%Y-%m-%d %H:%M:%S')}{COLS.ENDC}")
-        print(f"\t Finish: " + \
-              f"{COLS.OKCYAN}{now_end.strftime('%Y-%m-%d %H:%M:%S')}{COLS.ENDC}")
-        print(
-            f"\t{COLS.BULLET}{COLS.BOLD}{COLS.OKGREEN} Elapsed time:{COLS.ENDC} "
-            + f"{COLS.WARNING}{timedelta(seconds=time()-start)}{COLS.ENDC} "
-        )
+        if fancy:
+            print(f"\t{COLS.BOLD}Process:{COLS.ENDC} {COLS.FAIL}{procedure.__name__}{COLS.ENDC}")
+            print(f"\t Start:  " + \
+                  f"{COLS.HEADER}{now_start.strftime('%Y-%m-%d %H:%M:%S')}{COLS.ENDC}")
+            print(f"\t Finish: " + \
+                  f"{COLS.OKCYAN}{now_end.strftime('%Y-%m-%d %H:%M:%S')}{COLS.ENDC}")
+            print(
+                f"\t{COLS.BULLET}{COLS.BOLD}{COLS.OKGREEN} Elapsed time:{COLS.ENDC} "
+                + f"{COLS.WARNING}{timedelta(seconds=time()-start)}{COLS.ENDC} "
+            )
+        else:
+            print(f"\t Process: {procedure.__name__}")
+            print(f"\t Start:  {now_start.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"\t Finish: {now_end.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"\t {COLS.BULLET} Elapsed time: {timedelta(seconds=time()-start)}")
         return return_value
 
     return wrapper
